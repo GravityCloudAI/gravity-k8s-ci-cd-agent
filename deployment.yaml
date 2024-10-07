@@ -15,9 +15,19 @@ spec:
     spec:
       containers:
         - name: gravity-ci-cd-agent
-          image: gravitycloud/gravity-ci-cd-agent
-          tag: latest
+          image: gravitycloud/gravity-ci-cd-agent:latest
           imagePullPolicy: Always
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          volumeMounts:
+          - name: buildah-storage
+            mountPath: /var/lib/containers
+          - name: cgroup
+            mountPath: /sys/fs/cgroup
+            readOnly: true
           env:
             - name: GRAVITY_API_KEY # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_API_KEY}"
@@ -31,6 +41,12 @@ spec:
               value: "${AWS_SECRET_ACCESS_KEY}"
             - name: AWS_ACCOUNT_ID
               value: "${AWS_ACCOUNT_ID}"
+            - name: POSTGRES_USER
+              value: "${POSTGRES_USER}"
+            - name: POSTGRES_PASSWORD
+              value: "${POSTGRES_PASSWORD}"
+            - name: POSTGRES_DB
+              value: "${POSTGRES_DB}"
           resources:
             requests:
               memory: "2048Mi"
@@ -38,12 +54,37 @@ spec:
             limits:
               memory: "4096Mi"
               cpu: "2000m"
+      volumes:
+        - name: buildah-storage
+          emptyDir:
+            sizeLimit: 10Gi
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-gravity
+  namespace: gravity
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-gravity
+  template:
+    metadata:
+      labels:
+        app: postgres-gravity
+    spec:
+      containers:
         - name: postgres-gravity
           image: postgres:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: POSTGRES_DB
-              value: postgres
+              value: "${POSTGRES_DB}"
             - name: POSTGRES_USER
               value: "${POSTGRES_USER}"
             - name: POSTGRES_PASSWORD
@@ -65,3 +106,29 @@ spec:
         - name: postgres-gravity-storage
           persistentVolumeClaim:
             claimName: postgres-gravity-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-gravity-service
+  namespace: gravity
+spec:
+  selector:
+    app: postgres-gravity
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-gravity-pvc
+  namespace: gravity
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard

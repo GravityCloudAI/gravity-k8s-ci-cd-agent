@@ -11,7 +11,7 @@ import os from "os";
 import path from "path";
 
 const pool = new Pool({
-	host: 'postgres-gravity',
+	host: 'postgres-gravity-service',
 	database: process.env.POSTGRES_DB,
 	user: process.env.POSTGRES_USER,
 	password: process.env.POSTGRES_PASSWORD,
@@ -216,7 +216,7 @@ const syncGitRepo = async () => {
 						));
 
 						// build the docker image in sync with pushing the log output into array
-						const dockerBuildCommand = `docker build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
+						const dockerBuildCommand = `buildah --storage-driver vfs --isolation chroot bud --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
 						await customExec(dockerBuildCommand);
 
 						console.log("dockerBuildCommand COMPLETED");
@@ -255,10 +255,10 @@ const syncGitRepo = async () => {
 											}
 
 											// tag the docker image with the aws repository name and region
-											const dockerTagCommand = `docker tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
+											const dockerTagCommand = `buildah --storage-driver vfs tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
 											await customExec(dockerTagCommand);
 
-											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${ecrBaseURL} && docker push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
+											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | buildah --storage-driver vfs login --username AWS --password-stdin ${ecrBaseURL} && buildah --storage-driver vfs push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
 											console.log("dockerPushCommand:", dockerPushCommand);
 											await customExec(dockerPushCommand);
 
