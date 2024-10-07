@@ -1,10 +1,15 @@
-# Gravity Deployment Sync Documentation
+# Gravity CI/CD Agent for ArgoCD
 
 ## Runbook
 
 1. Update the `example.env` file with the required variables.
 2. Run `export $(grep -v '^#' .env | xargs) && envsubst < deployment.yaml > deployment_subst.yaml` to generate the deployment.yaml file with the actual values.
 3. Deploy the application to Kubernetes using `kubectl apply -f deployment_subst.yaml`.
+
+## Links
+1. Docker Hub: https://hub.docker.com/r/gravitycloud/gravity-ci-cd-agent
+2. Website: https://gravitycloud.ai
+3. Discord: https://discord.gg/fJU5DvanU3
 
 ## Working
 
