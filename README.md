@@ -1,6 +1,12 @@
 # Gravity Deployment Sync Documentation
 
-## Overview
+## Runbook
+
+1. Update the `example.env` file with the required variables.
+2. Run `export $(grep -v '^#' .env | xargs) && envsubst < deployment.yaml > deployment_subst.yaml` to generate the deployment.yaml file with the actual values.
+3. Deploy the application to Kubernetes using `kubectl apply -f deployment_subst.yaml`.
+
+## Working
 
 This TypeScript file (`src/index.ts`) is responsible for synchronizing GitHub repositories with AWS ECR (Elastic Container Registry) and managing deployments. It performs the following main tasks:
 

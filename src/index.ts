@@ -16,7 +16,7 @@ const pool = new Pool({
 	user: process.env.POSTGRES_USER,
 	password: process.env.POSTGRES_PASSWORD,
 	port: 5432,
-  });
+});
 
 // Replace getDbConnection function
 async function getDbConnection() {
@@ -115,6 +115,15 @@ const getGravityConfigFileFromRepo = async (repoData: any, githubToken: string) 
 		const gravityConfigFileJson = yaml.parse(response.data);
 		return gravityConfigFileJson;
 	}
+};
+
+const sendSlackNotification = async (title: string, message: string) => {
+	if (!process.env.SLACK_WEBHOOK_URL) {
+		console.log("Slack webhook URL not found, skipping notification");
+		return;
+	}
+	const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
+	await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` });
 };
 
 // sync git repo every 10 seconds
@@ -221,6 +230,8 @@ const syncGitRepo = async () => {
 
 						console.log("dockerBuildCommand COMPLETED");
 
+						sendSlackNotification("Docker Build Completed", `Docker build completed for ${repository}`);
+
 						const newValuesFiles: string[] = [];
 						const destinations: string[] = [];
 						const regions: string[] = [];
@@ -261,6 +272,8 @@ const syncGitRepo = async () => {
 											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | buildah --storage-driver vfs login --username AWS --password-stdin ${ecrBaseURL} && buildah --storage-driver vfs push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
 											console.log("dockerPushCommand:", dockerPushCommand);
 											await customExec(dockerPushCommand);
+
+											sendSlackNotification("Docker Push Completed", `Docker push completed for ${repository} in ${region}`);
 
 											const valueFileName = `values-${lastRunBranch}-${region}.yaml`;
 
@@ -318,22 +331,26 @@ const syncGitRepo = async () => {
 												});
 
 												console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`);
+												sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${lastRunBranch} in ${region}`);
 
 												newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }));
 												regions.push(region);
 											} catch (error) {
 												console.error(`Error updating ${valueFileName}: ${error}`);
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+												sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${lastRunBranch} in ${region}: ${error}`);
 											}
 										} catch (error) {
 											console.error(`Error processing region ${region}: ${error}`);
 											await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+											sendSlackNotification("Deployment Failed", `Error processing region ${region} for ${repository}: ${error}`);
 										}
 									}));
 								} catch (error) {
 									console.error(`Error processing AWS repository ${repoDetails.name}: ${error}`);
 									console.error('Stack trace:', error.stack);
 									await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+									sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`);
 								}
 							}));
 						}
@@ -350,6 +367,7 @@ const syncGitRepo = async () => {
 					console.error('Stack trace:', error.stack);
 					// mark the run as failed
 					await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+					sendSlackNotification("Deployment Failed", `Error processing repository ${repository}: ${error}`);
 				}
 			} catch (error) {
 				console.error(`Error: ${error}`);
@@ -357,12 +375,12 @@ const syncGitRepo = async () => {
 		});
 	} catch (error) {
 		console.error(`Error in syncGitRepo: ${error}`);
+		sendSlackNotification("Deployment Failed", `Error in syncGitRepo: ${error}`);
 	} finally {
 		client?.release();
 	}
 };
 
-syncGitRepo();
-// setInterval(syncGitRepo, 10000);
+setInterval(syncGitRepo, 30000);
 
 // websocket to sync logs and updates to gravity server
