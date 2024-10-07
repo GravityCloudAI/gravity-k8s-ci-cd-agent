@@ -1,0 +1,19 @@
+name: gravity-ci-cd-agent
+namespace: gravity
+replicaCount: 1
+image:
+  repository: gravitycloud/gravity-ci-cd-agent
+  pullPolicy: IfNotPresent
+  tag: latest
+resources:
+  requests:
+    memory: "4Gi"
+    cpu: "2"
+  limits:
+    memory: "8Gi"
+    cpu: "4"
+hpa:
+  cpuUtilization:
+    targetPercentage: 50
+  maxReplicas: 4
+  minReplicas: 1

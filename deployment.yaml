@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gravity-ci-cd-agent
+  namespace: gravity
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gravity-ci-cd-agent
+  template:
+    metadata:
+      labels:
+        app: gravity-ci-cd-agent
+    spec:
+      containers:
+        - name: gravity-ci-cd-agent
+          image: gravitycloud/gravity-ci-cd-agent
+          tag: latest
+          imagePullPolicy: Always
+          env:
+            - name: GRAVITY_API_KEY # OPTIONAL: To sync logs, errors, and reports with Gravity UI
+              value: "${GRAVITY_API_KEY}"
+            - name: GITHUB_TOKEN
+              value: "${GITHUB_TOKEN}"
+            - name: GITHUB_REPOSITORIES
+              value: "${GITHUB_REPOSITORIES}"
+            - name: AWS_ACCESS_KEY_ID
+              value: "${AWS_ACCESS_KEY_ID}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "${AWS_SECRET_ACCESS_KEY}"
+            - name: AWS_ACCOUNT_ID
+              value: "${AWS_ACCOUNT_ID}"
+          resources:
+            requests:
+              memory: "2048Mi"
+              cpu: "1000m"
+            limits:
+              memory: "4096Mi"
+              cpu: "2000m"
+        - name: postgres-gravity
+          image: postgres:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_USER
+              value: "${POSTGRES_USER}"
+            - name: POSTGRES_PASSWORD
+              value: "${POSTGRES_PASSWORD}"
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: postgres-gravity-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: postgres
+      volumes:
+        - name: postgres-gravity-storage
+          persistentVolumeClaim:
+            claimName: postgres-gravity-pvc

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: gravity-ci-cd-agent
+maintainers:
+  - name: Vatsal
+    email: vatsal@gravitycloud.ai
+description: Helm chart to deploy the Gravity Cloud CI/CD Agent for ArgoCD
+type: application
+appVersion: "1.0.0"
+version: 1.0.0
