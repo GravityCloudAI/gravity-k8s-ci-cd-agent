@@ -31,6 +31,8 @@ spec:
           env:
             - name: GRAVITY_API_KEY # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_API_KEY}"
+            - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
+              value: "${GRAVITY_WEBSOCKET_URL}"
             - name: GITHUB_TOKEN
               value: "${GITHUB_TOKEN}"
             - name: GITHUB_REPOSITORIES
@@ -41,12 +43,16 @@ spec:
               value: "${AWS_SECRET_ACCESS_KEY}"
             - name: AWS_ACCOUNT_ID
               value: "${AWS_ACCOUNT_ID}"
+            - name: POSTGRES_HOST
+              value: "${POSTGRES_HOST}"
             - name: POSTGRES_USER
               value: "${POSTGRES_USER}"
             - name: POSTGRES_PASSWORD
               value: "${POSTGRES_PASSWORD}"
             - name: POSTGRES_DB
               value: "${POSTGRES_DB}"
+            - name: SLACK_WEBHOOK_URL # OPTIONAL: To send notifications to Slack
+              value: "${SLACK_WEBHOOK_URL}"
           resources:
             requests:
               memory: "2048Mi"

@@ -1,7 +1,7 @@
 "use strict";
 import { Octokit } from "@octokit/rest";
 import axios from "axios";
-import { exec } from "child_process";
+import { spawn } from "child_process";
 import fs from "fs";
 import pg from 'pg'
 import yaml from 'yaml';
@@ -9,9 +9,10 @@ const { Pool } = pg
 import { v4 } from 'uuid';
 import os from "os";
 import path from "path";
+import { io, Socket } from 'socket.io-client';
 
 const pool = new Pool({
-	host: 'postgres-gravity-service',
+	host: process.env.POSTGRES_HOST,
 	database: process.env.POSTGRES_DB,
 	user: process.env.POSTGRES_USER,
 	password: process.env.POSTGRES_PASSWORD,
@@ -69,30 +70,40 @@ interface AWSRepository {
 	branch: string;
 }
 
-interface CLIOutput {
-	command: string;
-	output: string;
+const syncLogsToGravityViaWebsocket = async (runId: string, action: string, message: string, isError: boolean = false) => {
+	if (socket && socket.connected) {
+		socket.emit('log', { runId, action, message, gravityApiKey: process.env.GRAVITY_API_KEY, timestamp: new Date().toISOString(), isError });
+	}
 }
 
-const terminalOutputs: CLIOutput[] = [];
-
-const customExec = (command: string): Promise<string> => {
+const customExec = (runId: string, action: string, command: string): Promise<string> => {
 	return new Promise((resolve, reject) => {
-		const process = exec(command);
-		process.stdout?.on('data', (data) => {
-			const output = data?.toString()?.trim() || "";
-			terminalOutputs.push({ command: command, output: output });
+		console.log(`Executing command: ${command}`);
+		const process = spawn(command, [], { shell: true });
+
+		const handleOutput = (data: Buffer) => {
+			const output = data.toString().trim();
 			console.log(output);
+			if (output) {
+				syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(output), false);
+			}
+		};
+
+		process.stdout.on('data', (data) => handleOutput(data));
+		process.stderr.on('data', (data) => handleOutput(data));
+
+		process.on('error', (error) => {
+			console.error(error);
+			syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(error.message), true);
+			reject(error);
 		});
-		process.stderr?.on('data', (data) => {
-			const errorOutput = data?.toString()?.trim() || "";
-			terminalOutputs.push({ command: command, output: errorOutput });
-			console.error(errorOutput);
-		});
+
 		process.on('close', (code) => {
+			console.log(`Process exited with code: ${code}`);
 			if (code !== 0) {
 				const error = new Error(`Process exited with code: ${code}`);
 				console.error(error);
+				syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(error.message), true);
 				reject(error);
 			} else {
 				resolve('Command executed successfully');
@@ -100,6 +111,40 @@ const customExec = (command: string): Promise<string> => {
 		});
 	});
 };
+
+
+let socket: Socket | null = null;
+
+if (process.env.GRAVITY_API_KEY) {
+	socket = io(process.env.GRAVITY_WEBSOCKET_URL, {
+		transports: ['websocket'],
+		reconnection: true,
+		reconnectionAttempts: 5,
+		reconnectionDelay: 1000,
+		timeout: 10000
+	});
+
+	socket.on('connect', () => {
+		console.log("Socket.IO connection opened");
+	});
+
+	socket.on('connect_error', (error: any) => {
+		console.error(`Socket.IO connection error: ${error}`);
+		console.error(`Error details: ${JSON.stringify(error)}`);
+	});
+
+	socket.on('disconnect', (reason: any) => {
+		console.log(`Socket.IO connection closed: ${reason}`);
+	});
+
+	socket.on('reconnect_attempt', (attemptNumber: number) => {
+		console.log(`Socket.IO reconnection attempt ${attemptNumber}`);
+	});
+
+	socket.on('reconnect_failed', () => {
+		console.error("Socket.IO failed to reconnect after all attempts");
+	});
+}
 
 const getGravityConfigFileFromRepo = async (repoData: any, githubToken: string) => {
 	const gravityConfigFile = repoData.find((item: any) => item.name === "gravity.yaml");
@@ -169,7 +214,9 @@ const syncGitRepo = async () => {
 							html_url: latestDeployRun?.actor?.html_url,
 							type: latestDeployRun?.actor?.type
 						};
-						await client?.query("INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, destinations, regions, values_files, status, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", [deploymentRunId, latestDeployRun.id, latestDeployRun?.head_commit?.id, repository, latestDeployRun?.head_branch, "", "", "", "IN_PROGRESS", latestDeployRun?.actor?.id, JSON.stringify(userDetails)]);
+						// await client?.query("INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, destinations, regions, values_files, status, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", [deploymentRunId, latestDeployRun.id, latestDeployRun?.head_commit?.id, repository, latestDeployRun?.head_branch, "", "", "", "IN_PROGRESS", latestDeployRun?.actor?.id, JSON.stringify(userDetails)]);
+
+						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails) }));
 
 						const gitRepo = await axios.get(`https://api.github.com/repos/${repository}/contents/`, {
 							headers: {
@@ -224,9 +271,14 @@ const syncGitRepo = async () => {
 							downloadFile(item, `${gitRepoPath}/${item.name}`)
 						));
 
+						let dockerBuildCli = "docker";
+						if (process.env.ENV === "production") {
+							dockerBuildCli = "buildah --storage-driver vfs --isolation chroot";
+						}
+
 						// build the docker image in sync with pushing the log output into array
-						const dockerBuildCommand = `buildah --storage-driver vfs --isolation chroot bud --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
-						await customExec(dockerBuildCommand);
+						const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
+						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand);
 
 						console.log("dockerBuildCommand COMPLETED");
 
@@ -259,19 +311,19 @@ const syncGitRepo = async () => {
 
 											// check if the ecr repository exists, if not create it
 											try {
-												await customExec(`AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`);
+												await customExec(deploymentRunId, "ECR_REPOSITORY_CHECK", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`);
 											} catch (error) {
 												console.error(`Error checking if repository ${awsRepositoryName} exists: ${error}`);
-												await customExec(`AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`);
+												await customExec(deploymentRunId, "ECR_REPOSITORY_CREATE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`);
 											}
 
 											// tag the docker image with the aws repository name and region
-											const dockerTagCommand = `buildah --storage-driver vfs tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
-											await customExec(dockerTagCommand);
+											const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
+											await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", dockerTagCommand);
 
-											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | buildah --storage-driver vfs login --username AWS --password-stdin ${ecrBaseURL} && buildah --storage-driver vfs push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
+											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
 											console.log("dockerPushCommand:", dockerPushCommand);
-											await customExec(dockerPushCommand);
+											await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", dockerPushCommand);
 
 											sendSlackNotification("Docker Push Completed", `Docker push completed for ${repository} in ${region}`);
 
@@ -335,6 +387,7 @@ const syncGitRepo = async () => {
 
 												newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }));
 												regions.push(region);
+
 											} catch (error) {
 												console.error(`Error updating ${valueFileName}: ${error}`);
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
@@ -343,6 +396,7 @@ const syncGitRepo = async () => {
 										} catch (error) {
 											console.error(`Error processing region ${region}: ${error}`);
 											await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+											syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true);
 											sendSlackNotification("Deployment Failed", `Error processing region ${region} for ${repository}: ${error}`);
 										}
 									}));
@@ -350,6 +404,7 @@ const syncGitRepo = async () => {
 									console.error(`Error processing AWS repository ${repoDetails.name}: ${error}`);
 									console.error('Stack trace:', error.stack);
 									await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+									syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true);
 									sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`);
 								}
 							}));
@@ -361,12 +416,15 @@ const syncGitRepo = async () => {
 							"UPDATE deployments SET destinations = $1, regions = $2, values_files = $3, status = $4 WHERE runId = $5",
 							[destinations.join(','), regions.join(','), JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
 						);
+
+						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", JSON.stringify({ newValuesFiles, destinations, regions }), false);
 					}
 				} catch (error) {
 					console.error(`Error processing repository ${repository}: ${error}`);
 					console.error('Stack trace:', error.stack);
 					// mark the run as failed
 					await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true);
 					sendSlackNotification("Deployment Failed", `Error processing repository ${repository}: ${error}`);
 				}
 			} catch (error) {
@@ -382,5 +440,3 @@ const syncGitRepo = async () => {
 };
 
 setInterval(syncGitRepo, 30000);
-
-// websocket to sync logs and updates to gravity server
