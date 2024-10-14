@@ -33,6 +33,8 @@ spec:
               value: "${GRAVITY_API_KEY}"
             - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_WEBSOCKET_URL}"
+            - name: ENV
+              value: "${ENV}"
             - name: GITHUB_TOKEN
               value: "${GITHUB_TOKEN}"
             - name: GITHUB_REPOSITORIES

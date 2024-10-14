@@ -351,10 +351,10 @@ const syncGitRepo = async () => {
 											}
 
 											// tag the docker image with the aws repository name and region
-											const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
+											const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.head_sha}`;
 											await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", dockerTagCommand);
 
-											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
+											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.head_sha}`;
 											await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", dockerPushCommand);
 
 											sendSlackNotification("Docker Push Completed", `Docker push completed for ${repository} in ${region}`);
@@ -371,7 +371,7 @@ const syncGitRepo = async () => {
 
 													const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8');
 													let parsedValuesFile = yaml.parse(valuesFileContent);
-													parsedValuesFile.image.tag = latestDeployRun.id;
+													parsedValuesFile.image.tag = latestDeployRun.head_sha;
 
 													const relativePath = path.relative(gitRepoPath, valuesFilePath);
 
@@ -431,7 +431,7 @@ const syncGitRepo = async () => {
 													}
 
 													let parsedValuesFile = yaml.parse(valuesFileContent);
-													parsedValuesFile.image.tag = latestDeployRun.id;
+													parsedValuesFile.image.tag = latestDeployRun.head_sha;
 
 													// create a temporary file with the new values file content with same name as the original one
 													fs.writeFileSync(localFilePath, yaml.stringify(parsedValuesFile));
@@ -563,5 +563,4 @@ const syncGitRepo = async () => {
 	}
 };
 
-// setInterval(syncGitRepo, 30000);
-syncGitRepo()
+setInterval(syncGitRepo, 30000);
