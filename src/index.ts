@@ -68,6 +68,25 @@ interface AWSRepository {
 	name: string;
 	regions: string[];
 	branch: string;
+	valueFile: {
+		source: string;
+		bucket?: string;
+	};
+}
+
+const findFile = (dir: string, fileName: string): string | null => {
+	const files = fs.readdirSync(dir);
+	for (const file of files) {
+		const filePath = path.join(dir, file);
+		const stat = fs.statSync(filePath);
+		if (stat.isDirectory()) {
+			const found = findFile(filePath, fileName);
+			if (found) return found;
+		} else if (file === fileName) {
+			return filePath;
+		}
+	}
+	return null;
 }
 
 const syncLogsToGravityViaWebsocket = async (runId: string, action: string, message: string, isError: boolean = false) => {
@@ -76,16 +95,21 @@ const syncLogsToGravityViaWebsocket = async (runId: string, action: string, mess
 	}
 }
 
-const customExec = (runId: string, action: string, command: string): Promise<string> => {
+const customExec = (runId: string, action: string, command: string, skipLogging: boolean = false): Promise<string> => {
 	return new Promise((resolve, reject) => {
 		console.log(`Executing command: ${command}`);
 		const process = spawn(command, [], { shell: true });
 
+		let output = '';
+
 		const handleOutput = (data: Buffer) => {
-			const output = data.toString().trim();
-			console.log(output);
-			if (output) {
-				syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(output), false);
+			const chunk = data.toString().trim();
+			output += chunk + '\n';
+			console.log(chunk);
+			if (!skipLogging) {
+				if (chunk) {
+					syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(chunk), false);
+				}
 			}
 		};
 
@@ -106,12 +130,11 @@ const customExec = (runId: string, action: string, command: string): Promise<str
 				syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(error.message), true);
 				reject(error);
 			} else {
-				resolve('Command executed successfully');
+				resolve(output);
 			}
 		});
 	});
 };
-
 
 let socket: Socket | null = null;
 
@@ -154,7 +177,7 @@ const getGravityConfigFileFromRepo = async (repoData: any, githubToken: string) 
 				"Authorization": `Bearer ${githubToken}`
 			}
 		});
-		console.log("getGravityConfigFileFromRepo:", response.data);
+		console.log("Gravity Config File:", response.data);
 
 		// convert the response.data from YAML to JSON
 		const gravityConfigFileJson = yaml.parse(response.data);
@@ -195,6 +218,12 @@ const syncGitRepo = async () => {
 					.filter((run: any) => run.name === "Deploy" && run.status === "completed")
 					.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
 
+				const gitBranchesAllowed = process.env.GIT_BRANCHES_ALLOWED!!.split(",");
+				if (!gitBranchesAllowed.includes(latestDeployRun.head_branch)) {
+					console.log(`Branch ${latestDeployRun.head_branch} not in allowed list, skipping`);
+					return;
+				}
+
 				const deploymentRunId = v4();
 
 				try {
@@ -202,7 +231,7 @@ const syncGitRepo = async () => {
 						// check if this run was processed before from postgres db
 						const checkIfProcessed = await client?.query("SELECT * FROM deployments WHERE actionId = $1 AND status IN ('COMPLETED', 'IN_PROGRESS')", [latestDeployRun.id]);
 						if (checkIfProcessed?.rows && checkIfProcessed.rows.length > 0) {
-							console.log("Run already processed");
+							console.log("Run already processed, skipping.");
 							return;
 						}
 
@@ -214,7 +243,8 @@ const syncGitRepo = async () => {
 							html_url: latestDeployRun?.actor?.html_url,
 							type: latestDeployRun?.actor?.type
 						};
-						// await client?.query("INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, destinations, regions, values_files, status, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", [deploymentRunId, latestDeployRun.id, latestDeployRun?.head_commit?.id, repository, latestDeployRun?.head_branch, "", "", "", "IN_PROGRESS", latestDeployRun?.actor?.id, JSON.stringify(userDetails)]);
+
+						await client?.query("INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, destinations, regions, values_files, status, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", [deploymentRunId, latestDeployRun.id, latestDeployRun?.head_commit?.id, repository, latestDeployRun?.head_branch, "", "", "", "IN_PROGRESS", latestDeployRun?.actor?.id, JSON.stringify(userDetails)]);
 
 						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails) }));
 
@@ -306,6 +336,8 @@ const syncGitRepo = async () => {
 									}
 
 									await Promise.all(awsRepositoryRegions.map(async (region) => {
+										regions.push(region);
+
 										try {
 											const ecrBaseURL = `${process.env.AWS_ACCOUNT_ID}.dkr.ecr.${region}.amazonaws.com`
 
@@ -314,6 +346,7 @@ const syncGitRepo = async () => {
 												await customExec(deploymentRunId, "ECR_REPOSITORY_CHECK", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`);
 											} catch (error) {
 												console.error(`Error checking if repository ${awsRepositoryName} exists: ${error}`);
+												console.log("Creating repository...");
 												await customExec(deploymentRunId, "ECR_REPOSITORY_CREATE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`);
 											}
 
@@ -322,77 +355,168 @@ const syncGitRepo = async () => {
 											await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", dockerTagCommand);
 
 											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${latestDeployRun.id}`;
-											console.log("dockerPushCommand:", dockerPushCommand);
 											await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", dockerPushCommand);
 
 											sendSlackNotification("Docker Push Completed", `Docker push completed for ${repository} in ${region}`);
 
-											const valueFileName = `values-${lastRunBranch}-${region}.yaml`;
+											if (repoDetails?.valueFile?.source === "git") {
+												const valueFileName = `values-${lastRunBranch}-${region}.yaml`;
 
-											try {
-
-												function findFile(dir: string, fileName: string): string | null {
-													const files = fs.readdirSync(dir);
-													for (const file of files) {
-														const filePath = path.join(dir, file);
-														const stat = fs.statSync(filePath);
-														if (stat.isDirectory()) {
-															const found = findFile(filePath, fileName);
-															if (found) return found;
-														} else if (file === fileName) {
-															return filePath;
-														}
+												try {
+													const valuesFilePath = findFile(gitRepoPath, valueFileName);
+													if (!valuesFilePath) {
+														console.error(`Values file ${valueFileName} not found`);
+														return;
 													}
-													return null;
+
+													const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8');
+													let parsedValuesFile = yaml.parse(valuesFileContent);
+													parsedValuesFile.image.tag = latestDeployRun.id;
+
+													const relativePath = path.relative(gitRepoPath, valuesFilePath);
+
+													// Fetch the current file to get its SHA
+													const { data: currentFile } = await octokit.repos.getContent({
+														owner,
+														repo,
+														path: relativePath,
+														ref: lastRunBranch
+													});
+
+													if (Array.isArray(currentFile)) {
+														console.error(`${relativePath} is a directory, not a file`);
+														return;
+													}
+
+													// this method does not trigger workflow dispatch event
+													await octokit.repos.createOrUpdateFileContents({
+														owner,
+														repo,
+														path: relativePath,
+														message: `[skip ci] Updated values file for ${lastRunBranch} in ${region} for deployment ${latestDeployRun.id}`,
+														content: Buffer.from(yaml.stringify(parsedValuesFile)).toString('base64'),
+														sha: currentFile.sha,
+														branch: lastRunBranch
+													});
+
+													console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`);
+													sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${lastRunBranch} in ${region}`);
+
+													newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }));
+												} catch (error) {
+													console.error(`Error updating ${valueFileName}: ${error}`);
+													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+													sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${lastRunBranch} in ${region}: ${error}`);
 												}
+											} else if (repoDetails?.valueFile?.source === "s3") {
+												try {
+													let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${repoDetails?.valueFile?.bucket} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true);
 
-												const valuesFilePath = findFile(gitRepoPath, valueFileName);
-												if (!valuesFilePath) {
-													console.error(`Values file ${valueFileName} not found`);
-													return;
+													if (!latestValueFileFromS3Bucket) {
+														console.error(`No value file found in ${repoDetails?.valueFile?.bucket}`);
+														return;
+													}
+													latestValueFileFromS3Bucket = latestValueFileFromS3Bucket.trim();
+
+													const tempDir = os.tmpdir();
+													const localFilePath = path.join(tempDir, path.basename(latestValueFileFromS3Bucket));
+
+													await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket} ${localFilePath}`, true);
+
+													const valuesFileContent = fs.readFileSync(localFilePath, 'utf8');
+
+													if (!valuesFileContent) {
+														console.error(`Error getting values file content from ${repoDetails?.valueFile?.bucket}`);
+														return;
+													}
+
+													let parsedValuesFile = yaml.parse(valuesFileContent);
+													parsedValuesFile.image.tag = latestDeployRun.id;
+
+													// create a temporary file with the new values file content with same name as the original one
+													fs.writeFileSync(localFilePath, yaml.stringify(parsedValuesFile));
+
+													// upload the temporary file to the s3 bucket
+													try {
+														console.log(`Updating S3 file: ${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`);
+
+														// First, delete the existing file
+														console.log(`Deleting existing S3 file: ${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`);
+														const s3DeleteCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 rm s3://${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`;
+														await customExec(deploymentRunId, "DELETING_S3_FILE", s3DeleteCommand, true);
+														console.log(`Successfully deleted existing S3 file: ${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`);
+
+														// Then, upload the new file
+														console.log(`Uploading new S3 file: ${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`);
+														const s3UploadCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp ${localFilePath} s3://${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`;
+														await customExec(deploymentRunId, "UPLOADING_S3_FILE", s3UploadCommand, true);
+														console.log(`Successfully uploaded new values file to S3 bucket: ${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`);
+
+													} catch (error) {
+														console.error(`Failed to update values file in S3 bucket: ${error}`);
+														await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+														syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: `S3 file update failed: ${error.message}` }), true);
+														sendSlackNotification("Values File Update Failed", `Error updating values file in S3 bucket for ${lastRunBranch} in ${region}: ${error}`);
+														throw error;
+													}
+
+													newValuesFiles.push(JSON.stringify({ name: latestValueFileFromS3Bucket, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }));
+
+													// delete the temporary file
+													fs.unlinkSync(localFilePath);
+
+													const argoManifestFileName = `argo-${serviceName}-${lastRunBranch}-${region}.yaml`;
+
+													// get the argo manifest file from the git repo
+													const argoManifestFilePath = findFile(gitRepoPath, argoManifestFileName);
+													if (!argoManifestFilePath) {
+														console.error(`Values file ${argoManifestFileName} not found`);
+														return;
+													}
+
+													const argoManifestFileContent = fs.readFileSync(argoManifestFilePath, 'utf8');
+													let parsedArgoManifestFile = yaml.parse(argoManifestFileContent);
+													parsedArgoManifestFile.spec.source.helm.valueFiles = `https://${repoDetails?.valueFile?.bucket}.s3.amazonaws.com/${latestValueFileFromS3Bucket}`;
+
+													// update the argo manifest file with the new values file
+													fs.writeFileSync(argoManifestFilePath, yaml.stringify(parsedArgoManifestFile));
+
+													const relativePath = path.relative(gitRepoPath, argoManifestFilePath);
+
+													// Fetch the current file to get its SHA
+													const { data: currentFile } = await octokit.repos.getContent({
+														owner,
+														repo,
+														path: relativePath,
+														ref: lastRunBranch
+													});
+
+													if (Array.isArray(currentFile)) {
+														console.error(`${relativePath} is a directory, not a file`);
+														return;
+													}
+
+													// this method does not trigger workflow dispatch event
+													await octokit.repos.createOrUpdateFileContents({
+														owner,
+														repo,
+														path: relativePath,
+														message: `[skip ci] Updated Argo Manifest file for ${lastRunBranch} in ${region} for deployment ${latestDeployRun.id}`,
+														content: Buffer.from(yaml.stringify(parsedArgoManifestFile)).toString('base64'),
+														sha: currentFile.sha,
+														branch: lastRunBranch
+													});
+
+													console.log(`Updated ${argoManifestFileName} for ${lastRunBranch} in ${region}`);
+													sendSlackNotification("Argo Manifest File Updated", `Updated ${argoManifestFileName} for ${lastRunBranch} in ${region}`);
+
+												} catch (error) {
+													console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`);
+													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+													sendSlackNotification("Argo Manifest File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`);
 												}
-
-												const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8');
-												let parsedValuesFile = yaml.parse(valuesFileContent);
-												parsedValuesFile.image.tag = latestDeployRun.id;
-
-												const relativePath = path.relative(gitRepoPath, valuesFilePath);
-
-												// Fetch the current file to get its SHA
-												const { data: currentFile } = await octokit.repos.getContent({
-													owner,
-													repo,
-													path: relativePath,
-													ref: lastRunBranch
-												});
-
-												if (Array.isArray(currentFile)) {
-													console.error(`${relativePath} is a directory, not a file`);
-													return;
-												}
-
-												// this method does not trigger workflow dispatch event
-												await octokit.repos.createOrUpdateFileContents({
-													owner,
-													repo,
-													path: relativePath,
-													message: `[skip ci] Updated values file for ${lastRunBranch} in ${region} for deployment ${latestDeployRun.id}`,
-													content: Buffer.from(yaml.stringify(parsedValuesFile)).toString('base64'),
-													sha: currentFile.sha,
-													branch: lastRunBranch
-												});
-
-												console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`);
-												sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${lastRunBranch} in ${region}`);
-
-												newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }));
-												regions.push(region);
-
-											} catch (error) {
-												console.error(`Error updating ${valueFileName}: ${error}`);
-												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
-												sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${lastRunBranch} in ${region}: ${error}`);
 											}
+
 										} catch (error) {
 											console.error(`Error processing region ${region}: ${error}`);
 											await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
@@ -439,4 +563,5 @@ const syncGitRepo = async () => {
 	}
 };
 
-setInterval(syncGitRepo, 30000);
+// setInterval(syncGitRepo, 30000);
+syncGitRepo()
