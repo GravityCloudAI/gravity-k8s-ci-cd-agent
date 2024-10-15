@@ -56,7 +56,6 @@ spec:
 
 
 ### Gravity K8s Agent
-
 1. Update the `example.env` file with the required variables.
 ```
 GRAVITY_API_KEY=
@@ -78,7 +77,6 @@ GIT_BRANCHES_ALLOWED=main,staging
 3. Deploy the application to Kubernetes using `kubectl apply -f deployment_subst.yaml`.
 
 ### Working
-
 1. The agent syncs with the repository and checks if there are any new CI actions completed.
 2. It then check the postgress database for the status of the deployment action (if completed previously, pending or failed)
 3. Generates the Docker file, and then iterates through the cloud accounts, regions while tagging and pushin them into the repositories.
