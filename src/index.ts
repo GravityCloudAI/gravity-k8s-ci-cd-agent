@@ -16,7 +16,7 @@ const pool = new Pool({
 	database: process.env.POSTGRES_DB,
 	user: process.env.POSTGRES_USER,
 	password: process.env.POSTGRES_PASSWORD,
-	port: 6543,
+	port: 5432,
 });
 
 // Replace getDbConnection function
@@ -310,7 +310,7 @@ const syncGitRepo = async () => {
 
 						// build the docker image in sync with pushing the log output into array
 						const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
-						// await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand);
+						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand);
 
 						console.log("dockerBuildCommand COMPLETED");
 
