@@ -303,11 +303,11 @@ const syncGitRepo = async () => {
 
 						let dockerBuildCli = "docker";
 						if (process.env.ENV === "production") {
-							dockerBuildCli = "buildah --storage-driver vfs --isolation chroot";
+							dockerBuildCli = "buildah --storage-driver vfs";
 						}
 
 						// build the docker image in sync with pushing the log output into array
-						const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
+						const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${gitRepoPath}/Dockerfile ${gitRepoPath}`;
 						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand);
 
 						console.log("dockerBuildCommand COMPLETED");

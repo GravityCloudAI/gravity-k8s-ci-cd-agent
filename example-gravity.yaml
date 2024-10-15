@@ -1,0 +1,19 @@
+apiVersion: gravitycloud.ai/v1alpha1
+kind: GravityDeployment
+metadata:
+  name: nodejs-app
+spec:
+  branch:
+    - name: main
+      approval: manual
+    - name: development
+      approval: automatic
+  aws:
+    repository:
+      - name: nodejs-app-east
+        regions:
+          - us-east-1
+        branch: main
+        valueFile:
+          source: s3
+          bucket: gravity-app-prod-values
