@@ -177,7 +177,10 @@ if (process.env.GRAVITY_API_KEY) {
 		reconnection: true,
 		reconnectionAttempts: 5,
 		reconnectionDelay: 1000,
-		timeout: 10000
+		timeout: 10000,
+		auth: {
+			gravityApiKey: process.env.GRAVITY_API_KEY
+		}
 	});
 
 	socket.on('connect', () => {
@@ -420,6 +423,8 @@ const syncGitRepo = async () => {
 					]
 				);
 
+				syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath) }));
+
 				// Process each changed service
 				for (const service of services) {
 					if (!service.hasChanges) {
@@ -551,6 +556,7 @@ const syncGitRepo = async () => {
 											} catch (error) {
 												console.error(`Error updating ${valueFileName}: ${error}`);
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true);
 												sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${lastRunBranch} in ${region}: ${error}`);
 											}
 										} else if (repoDetails?.valueFile?.source === "s3") {
@@ -658,6 +664,7 @@ const syncGitRepo = async () => {
 											} catch (error) {
 												console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`);
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId]);
+												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true);
 												sendSlackNotification("Argo Manifest File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`);
 											}
 										}
@@ -685,6 +692,8 @@ const syncGitRepo = async () => {
 						[destinations.join(','), regions.join(','), JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
 					);
 
+					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", JSON.stringify({ newValuesFiles, destinations, regions }), false);
+
 					// Cleanup
 					if (fs.existsSync(gitRepoPath)) {
 						fs.rmSync(gitRepoPath, { recursive: true, force: true });
@@ -703,6 +712,4 @@ const syncGitRepo = async () => {
 	}
 };
 
-// setInterval(syncGitRepo, 30000);
-
-syncGitRepo()
+setInterval(syncGitRepo, 30000);
