@@ -266,23 +266,30 @@ const findServicesWithChanges = async (
 		head: branch
 	});
 
+	console.log(`Comparison: ${JSON.stringify(comparison)}`);
+
 	// If the commits are identical or the base is ahead, we should redeploy everything
 	const shouldRedeployAll = comparison.status === 'identical' || comparison.status === 'behind';
 
 	const changedFiles = shouldRedeployAll ? ['*'] : (comparison.files?.map(file => file.filename) || []);
+	console.log('Changed files:', changedFiles);
 
 	const serviceChanges: ServiceChange[] = [];
 
 	// Check each service directory for changes
 	for (const servicePath of gravityFiles) {
+		console.log(`Checking service path: ${servicePath}`);
 
 		// If we should redeploy all, mark everything as changed
 		const hasChanges = shouldRedeployAll || changedFiles.some(file => {
 			const isChange = servicePath === '.' ?
 				true : // For root directory, any change counts
 				file.startsWith(`${servicePath}/`); // For subdirectories
+			console.log(`File ${file} matches ${servicePath}? ${isChange}`);
 			return isChange;
 		});
+
+		console.log(`Service ${servicePath} has changes: ${hasChanges}`);
 
 		if (hasChanges) {
 			try {
@@ -299,12 +306,14 @@ const findServicesWithChanges = async (
 					gravityConfig,
 					lastCommitSha
 				});
+				console.log(`Added ${servicePath} to service changes`);
 			} catch (error) {
 				console.error(`Error fetching gravity config for ${servicePath}:`, error);
 			}
 		}
 	}
 
+	console.log('Final service changes:', serviceChanges);
 	return serviceChanges;
 };
 
@@ -380,6 +389,37 @@ const syncGitRepo = async () => {
 
 				console.log(`Services with changes: ${services.length}`);
 
+				if (services.length === 0) {
+					console.log(`No services with changes found, skipping`);
+					return;
+				}
+
+				const deploymentRunId = v4();
+
+				const userDetails = {
+					id: latestDeployRun?.actor?.id,
+					login: latestDeployRun?.actor?.login,
+					avatar_url: latestDeployRun?.actor?.avatar_url,
+					html_url: latestDeployRun?.actor?.html_url,
+					type: latestDeployRun?.actor?.type
+				};
+
+				await client?.query(
+					`INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, service_path, commit_sha, status, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+					[
+						deploymentRunId,
+						latestDeployRun.id,
+						latestDeployRun.head_commit.id,
+						repository,
+						latestDeployRun.head_branch,
+						services?.map((service) => service.servicePath).join(','),
+						latestDeployRun.head_sha,
+						"IN_PROGRESS",
+						latestDeployRun.actor.id,
+						JSON.stringify(userDetails)
+					]
+				);
+
 				// Process each changed service
 				for (const service of services) {
 					if (!service.hasChanges) {
@@ -387,38 +427,10 @@ const syncGitRepo = async () => {
 						return;
 					}
 
-					const deploymentRunId = v4();
 					const serviceName = service.servicePath === '.' ?
 						service.gravityConfig.metadata.name :
 						path.basename(service.servicePath);
 
-					// Create deployment record
-					const userDetails = {
-						id: latestDeployRun?.actor?.id,
-						login: latestDeployRun?.actor?.login,
-						avatar_url: latestDeployRun?.actor?.avatar_url,
-						html_url: latestDeployRun?.actor?.html_url,
-						type: latestDeployRun?.actor?.type
-					};
-
-					await client?.query(
-						`INSERT INTO deployments (
-				runId, actionId, commit_id, repository_name, branch, 
-				service_path, commit_sha, status, user_id, user_details
-			  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-						[
-							deploymentRunId,
-							latestDeployRun.id,
-							latestDeployRun.head_commit.id,
-							repository,
-							latestDeployRun.head_branch,
-							service.servicePath,
-							latestDeployRun.head_sha,
-							"IN_PROGRESS",
-							latestDeployRun.actor.id,
-							JSON.stringify(userDetails)
-						]
-					);
 
 					// Clone repository
 					const tempDir = os.tmpdir();
@@ -495,7 +507,8 @@ const syncGitRepo = async () => {
 											const valueFileName = `values-${lastRunBranch}-${region}.yaml`;
 
 											try {
-												const valuesFilePath = findFile(gitRepoPath, valueFileName);
+												let valuesFilePath = findFile(path.join(gitRepoPath, service.servicePath), valueFileName);
+
 												if (!valuesFilePath) {
 													console.error(`Values file ${valueFileName} not found`);
 													return;
