@@ -1,5 +1,3 @@
-apiVersion: gravitycloud.ai/v1alpha1
-kind: GravityDeployment
 metadata:
   name: nodejs-app
 spec:

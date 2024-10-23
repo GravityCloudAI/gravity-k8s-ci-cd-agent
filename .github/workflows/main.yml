@@ -39,3 +39,4 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: 'gravitycloud/gravity-ci-cd-agent:latest'
+          platforms: linux/arm64

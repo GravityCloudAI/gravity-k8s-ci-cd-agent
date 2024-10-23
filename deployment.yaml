@@ -62,6 +62,8 @@ spec:
               value: "${POSTGRES_PASSWORD}"
             - name: POSTGRES_DB
               value: "${POSTGRES_DB}"
+            - name: POSTGRES_PORT
+              value: "${POSTGRES_PORT:-5432}"
             - name: SLACK_WEBHOOK_URL # OPTIONAL: To send notifications to Slack
               value: "${SLACK_WEBHOOK_URL}"
           resources:
