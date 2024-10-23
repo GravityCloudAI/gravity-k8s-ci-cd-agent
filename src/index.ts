@@ -509,7 +509,7 @@ const syncGitRepo = async () => {
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${repository} in ${region}`);
 
 										if (repoDetails?.valueFile?.source === "git") {
-											const valueFileName = `values-${lastRunBranch}-${region}.yaml`;
+											const valueFileName = `${serviceName}-values-${lastRunBranch}-${region}.yaml`;
 
 											try {
 												let valuesFilePath = findFile(path.join(gitRepoPath, service.servicePath), valueFileName);
