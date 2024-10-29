@@ -363,8 +363,8 @@ const syncGitRepo = async () => {
 				const gitBranchesAllowed = process.env.GIT_BRANCHES_ALLOWED!!.split(",");
 				const branchMatches = gitBranchesAllowed.some(allowedBranch => {
 					if (allowedBranch.endsWith('.*')) {
-						// Convert wildcard pattern to regex
-						const pattern = new RegExp(`^${allowedBranch.slice(0, -2)}-.*$`);
+						const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+						const pattern = new RegExp(`^${prefix}.*$`);
 						return pattern.test(latestDeployRun.head_branch);
 					}
 					return allowedBranch === latestDeployRun.head_branch;
@@ -502,7 +502,8 @@ const syncGitRepo = async () => {
 										// check if the branch is a wildcard pattern
 										if (awsRepositoryBranch.endsWith('.*')) {
 											// convert wildcard pattern to regex
-											const pattern = new RegExp(`^${awsRepositoryBranch.slice(0, -2)}-.*$`);
+											const prefix = awsRepositoryBranch.slice(0, -2);
+											const pattern = new RegExp(`^${prefix}.*$`);
 											if (!pattern.test(lastRunBranch)) {
 												console.log(`Branch ${lastRunBranch} does not match pattern ${awsRepositoryBranch}, skipping deployment`);
 												return;
@@ -593,12 +594,14 @@ const syncGitRepo = async () => {
 											} else if (repoDetails?.valueFile?.source === "s3") {
 												try {
 													let valueFilesPath = repoDetails?.valueFile?.bucket
+													let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${valueFilesPath} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true);
 
 													if (valueFilesPath?.endsWith('.*')) {
-														valueFilesPath = valueFilesPath.replace('.*', lastRunBranch);
-													}
+														const lastSlashIndex = valueFilesPath.lastIndexOf('/');
+														const basePath = valueFilesPath.slice(0, lastSlashIndex + 1);
 
-													let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${valueFilesPath} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true);
+														latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${basePath} --prefix ${lastRunBranch} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true);
+													}
 
 													if (!latestValueFileFromS3Bucket) {
 														console.error(`No value file found in ${valueFilesPath}`);
@@ -630,13 +633,25 @@ const syncGitRepo = async () => {
 
 														// First, delete the existing file
 														console.log(`Deleting existing S3 file: ${valueFilesPath}/${latestValueFileFromS3Bucket}`);
-														const s3DeleteCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 rm s3://${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`;
+
+														let s3DeletePath = valueFilesPath;
+														if (valueFilesPath?.endsWith('.*')) {
+															const lastSlashIndex = valueFilesPath.lastIndexOf('/');
+															s3DeletePath = valueFilesPath.slice(0, lastSlashIndex + 1);
+														}
+
+														const s3DeleteCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 rm s3://${s3DeletePath}/${latestValueFileFromS3Bucket}`;
 														await customExec(deploymentRunId, "DELETING_S3_FILE", s3DeleteCommand, true);
 														console.log(`Successfully deleted existing S3 file: ${valueFilesPath}/${latestValueFileFromS3Bucket}`);
 
 														// Then, upload the new file
 														console.log(`Uploading new S3 file: ${valueFilesPath}/${latestValueFileFromS3Bucket}`);
-														const s3UploadCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp ${localFilePath} s3://${repoDetails?.valueFile?.bucket}/${latestValueFileFromS3Bucket}`;
+														let s3UploadPath = valueFilesPath;
+														if (valueFilesPath?.endsWith('.*')) {
+															const lastSlashIndex = valueFilesPath.lastIndexOf('/');
+															s3UploadPath = valueFilesPath.slice(0, lastSlashIndex + 1);
+														}
+														const s3UploadCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp ${localFilePath} s3://${s3UploadPath}/${latestValueFileFromS3Bucket}`;
 														await customExec(deploymentRunId, "UPLOADING_S3_FILE", s3UploadCommand, true);
 														console.log(`Successfully uploaded new values file to S3 bucket: ${valueFilesPath}/${latestValueFileFromS3Bucket}`);
 
@@ -756,4 +771,4 @@ const syncGitRepo = async () => {
 };
 
 syncGitRepo()
-// setInterval(syncGitRepo, 30000);
+// setInterval(syncGitRepo, 10000);
