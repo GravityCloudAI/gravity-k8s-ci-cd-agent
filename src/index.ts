@@ -770,5 +770,5 @@ const syncGitRepo = async () => {
 	}
 };
 
-syncGitRepo()
-// setInterval(syncGitRepo, 10000);
+// syncGitRepo()
+setInterval(syncGitRepo, 30000);
