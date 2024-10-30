@@ -477,6 +477,8 @@ const syncGitRepo = async () => {
 
 						const lastRunBranch = latestDeployRun.head_branch
 
+						sendSlackNotification("Docker Build Started", `Docker build started for for ${serviceName} / ${lastRunBranch} in ${repository}`)
+
 						// Build Docker image
 						let dockerBuildCli = process.env.ENV === "production" ? "buildah --storage-driver vfs" : "docker"
 						const serviceContext = path.join(gitRepoPath, service.servicePath)
@@ -485,6 +487,8 @@ const syncGitRepo = async () => {
 						const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
 						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand)
+
+						sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
 						// Continue with existing AWS deployment logic
 						const newValuesFiles: string[] = []
@@ -538,7 +542,7 @@ const syncGitRepo = async () => {
 
 											await customExec(deploymentRunId, "DOCKER_LOGOUT", `${dockerBuildCli} logout ${ecrBaseURL}`)
 
-											sendSlackNotification("Docker Push Completed", `Docker push completed for ${repository} in ${region}`)
+											sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 
 											if (repoDetails?.valueFile?.source === "git") {
 												const valueFileName = `${serviceName}-values-${lastRunBranch}-${region}.yaml`
@@ -582,14 +586,14 @@ const syncGitRepo = async () => {
 													})
 
 													console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`)
-													sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${lastRunBranch} in ${region}`)
+													sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
 
 													newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
 												} catch (error) {
 													console.error(`Error updating ${valueFileName}: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
 													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
-													sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${lastRunBranch} in ${region}: ${error}`)
+													sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}: ${error}`)
 												}
 											} else if (repoDetails?.valueFile?.source === "s3") {
 												try {
@@ -655,6 +659,8 @@ const syncGitRepo = async () => {
 														await customExec(deploymentRunId, "UPLOADING_S3_FILE", s3UploadCommand, true)
 														console.log(`Successfully uploaded new values file to S3 bucket: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
 
+														sendSlackNotification("S3 Values File Updated", `Updated ${path.basename(latestValueFileFromS3Bucket)} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
+
 													} catch (error) {
 														console.error(`Failed to update values file in S3 bucket: ${error}`)
 														await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
@@ -669,6 +675,8 @@ const syncGitRepo = async () => {
 													fs.unlinkSync(localFilePath)
 
 													await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+													sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
+
 												} catch (error) {
 													console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
