@@ -81,8 +81,8 @@ spec:
               cpu: "4000m"
       volumes:
         - name: buildah-storage
-          emptyDir:
-            sizeLimit: 50Gi
+          persistentVolumeClaim:
+            claimName: agent-gravity-pvc
         - name: cgroup
           hostPath:
             path: /sys/fs/cgroup
@@ -155,5 +155,18 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi
+      storage: 1Gi
   storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-gravity-pvc
+  namespace: gravity
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard  

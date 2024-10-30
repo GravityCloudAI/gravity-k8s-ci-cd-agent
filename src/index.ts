@@ -27,6 +27,8 @@ const pool = new Pool({
 	port: process.env.POSTGRES_PORT ? parseInt(process.env.POSTGRES_PORT) : 5432,
 })
 
+const progressTracker = new Map<string, string>()
+
 // Replace getDbConnection function
 async function getDbConnection() {
 	return await pool.connect()
@@ -85,22 +87,37 @@ interface AWSRepository {
 }
 
 const syncArgoCD = async (appName: string, argoCDUrl: string, token: string) => {
-    const url = `${argoCDUrl}/api/v1/applications/${appName}?refresh=hard`
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            },
-            httpsAgent: new https.Agent({
-                rejectUnauthorized: false
-            })
-        })
-        console.log('Sync triggered successfully:', response.data)
-    } catch (error) {
-        console.error('Failed to trigger sync:', error)
-    }
+	const url = `${argoCDUrl}/api/v1/applications/${appName}?refresh=hard`
+	try {
+		const response = await axios.get(url, {
+			headers: {
+				'Authorization': `Bearer ${token}`,
+				'Content-Type': 'application/json',
+			},
+			httpsAgent: new https.Agent({
+				rejectUnauthorized: false
+			})
+		})
+		console.log('Sync triggered successfully:', response.data)
+	} catch (error) {
+		console.error('Failed to trigger sync:', error)
+	}
 }
+
+const updateImageTag = (obj: any, newTag: string): boolean => {
+	if (typeof obj !== 'object' || obj === null) return false;
+
+	let updated = false;
+	for (const key in obj) {
+		if (key === 'image' && typeof obj[key] === 'object' && 'tag' in obj[key]) {
+			obj[key].tag = newTag;
+			updated = true;
+		} else if (typeof obj[key] === 'object') {
+			updated = updateImageTag(obj[key], newTag) || updated;
+		}
+	}
+	return updated;
+};
 
 const findFile = (dir: string, fileName: string): string | null => {
 	const files = fs.readdirSync(dir)
@@ -464,6 +481,8 @@ const syncGitRepo = async () => {
 					]
 				)
 
+				progressTracker.set(deploymentRunId, "IN_PROGRESS")
+
 				syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath), destinations: Array.from(destinations), regions: Array.from(regionsSet) }))
 
 				// Process each changed service
@@ -574,8 +593,12 @@ const syncGitRepo = async () => {
 													}
 
 													const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
-													let parsedValuesFile = yaml.parse(valuesFileContent)
-													parsedValuesFile.image.tag = imageTag
+
+													const parsedValuesFile = yaml.parse(valuesFileContent);
+													if (!updateImageTag(parsedValuesFile, imageTag)) {
+														console.error('Error: No image.tag pattern found in values file');
+														return
+													}
 
 													const relativePath = path.relative(gitRepoPath, valuesFilePath)
 
@@ -610,6 +633,7 @@ const syncGitRepo = async () => {
 												} catch (error) {
 													console.error(`Error updating ${valueFileName}: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+													progressTracker.set(deploymentRunId, "FAILED")
 													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
 													sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}: ${error}`)
 												}
@@ -682,6 +706,7 @@ const syncGitRepo = async () => {
 													} catch (error) {
 														console.error(`Failed to update values file in S3 bucket: ${error}`)
 														await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+														progressTracker.set(deploymentRunId, "FAILED")
 														syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: `S3 file update failed: ${error.message}` }), true)
 														sendSlackNotification("Values File Update Failed", `Error updating values file in S3 bucket for ${lastRunBranch} in ${region}: ${error}`)
 														throw error
@@ -698,6 +723,7 @@ const syncGitRepo = async () => {
 												} catch (error) {
 													console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+													progressTracker.set(deploymentRunId, "FAILED")
 													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
 													sendSlackNotification("S3 File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`)
 												}
@@ -706,6 +732,7 @@ const syncGitRepo = async () => {
 										} catch (error) {
 											console.error(`Error processing region ${region}: ${error}`)
 											await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+											progressTracker.set(deploymentRunId, "FAILED")
 											syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
 											sendSlackNotification("Deployment Failed", `Error processing region ${region} for ${repository}: ${error}`)
 										}
@@ -714,6 +741,7 @@ const syncGitRepo = async () => {
 									console.error(`Error processing AWS repository ${repoDetails.name}: ${error}`)
 									console.error('Stack trace:', error.stack)
 									await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+									progressTracker.set(deploymentRunId, "FAILED")
 									syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
 									sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`)
 								}
@@ -726,6 +754,7 @@ const syncGitRepo = async () => {
 							[JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
 						)
 
+						progressTracker.delete(deploymentRunId)
 						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", JSON.stringify({ newValuesFiles }), false)
 
 						// Cleanup
@@ -735,6 +764,7 @@ const syncGitRepo = async () => {
 					} catch (error) {
 						console.error(`Error processing service ${service.servicePath}: ${error}`)
 						await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+						progressTracker.set(deploymentRunId, "FAILED")
 						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
 						sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 					}
@@ -751,5 +781,24 @@ const syncGitRepo = async () => {
 		client?.release()
 	}
 }
+
+const cleanup = async () => {
+	let client: pg.PoolClient | null = null
+	try {
+		client = await pool.connect()
+		await Promise.all(Array.from(progressTracker.entries()).map(async ([key, value]) => {
+			if (value === "IN_PROGRESS") {
+				await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", key])
+				syncLogsToGravityViaWebsocket(key, "PIPELINE_FAILED", JSON.stringify({ error: "Pod termination" }), true)
+			}
+		}))
+	} finally {
+		client?.release()
+	}
+	process.exit(0);
+};
+
+process.on('SIGTERM', cleanup);
+process.on('SIGINT', cleanup);
 
 setInterval(syncGitRepo, 30000)
