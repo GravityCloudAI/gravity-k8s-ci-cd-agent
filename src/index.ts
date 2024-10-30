@@ -669,8 +669,6 @@ const syncGitRepo = async () => {
 													fs.unlinkSync(localFilePath)
 
 													await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
-													// if the s3 file url remains the same, then how to tell argo cd to use it
-
 												} catch (error) {
 													console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
