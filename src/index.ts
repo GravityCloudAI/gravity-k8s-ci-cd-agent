@@ -350,7 +350,7 @@ const syncGitRepo = async () => {
 				})
 
 				const latestDeployRun = githubActionsStatus.data.workflow_runs
-					.filter((run: any) => run.name === "Deploy" && run.status === "completed")
+					.filter((run: any) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
 					.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
 
 				if (!latestDeployRun) {

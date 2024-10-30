@@ -9,7 +9,7 @@ export async function syncArgoCD(appName: string, argoCDUrl: string, token: stri
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
             },
-            httpsAgent: new https.Agent({  // Add this option
+            httpsAgent: new https.Agent({
                 rejectUnauthorized: false
             })
         })

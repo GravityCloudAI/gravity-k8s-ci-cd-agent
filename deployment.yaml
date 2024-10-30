@@ -48,6 +48,8 @@ spec:
               value: "${GITHUB_REPOSITORIES}"
             - name: GIT_BRANCHES_ALLOWED
               value: "${GIT_BRANCHES_ALLOWED}"
+            - name: GITHUB_JOB_NAME
+              value: "${GITHUB_JOB_NAME}"
             - name: AWS_ACCESS_KEY_ID
               value: "${AWS_ACCESS_KEY_ID}"
             - name: AWS_SECRET_ACCESS_KEY

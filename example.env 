@@ -1,6 +1,7 @@
 GRAVITY_API_KEY=
 GITHUB_TOKEN=
 GITHUB_REPOSITORIES=array-separated-by-comma,second-repo
+GITHUB_JOB_NAME=Deploy
 AWS_ACCESS_KEY_ID=access-key-with-ecr-login-and-push-permissions
 AWS_SECRET_ACCESS_KEY=
 AWS_ACCOUNT_ID=
