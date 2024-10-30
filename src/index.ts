@@ -10,7 +10,7 @@ import { v4 } from 'uuid'
 import os from "os"
 import path from "path"
 import { io, Socket } from 'socket.io-client'
-import { syncArgoCD } from "./argocdHelper"
+import https from 'https'
 
 interface ServiceChange {
 	servicePath: string
@@ -82,6 +82,24 @@ interface AWSRepository {
 		source: string
 		bucket?: string
 	}
+}
+
+const syncArgoCD = async (appName: string, argoCDUrl: string, token: string) => {
+    const url = `${argoCDUrl}/api/v1/applications/${appName}?refresh=hard`
+    try {
+        const response = await axios.get(url, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            httpsAgent: new https.Agent({
+                rejectUnauthorized: false
+            })
+        })
+        console.log('Sync triggered successfully:', response.data)
+    } catch (error) {
+        console.error('Failed to trigger sync:', error)
+    }
 }
 
 const findFile = (dir: string, fileName: string): string | null => {
