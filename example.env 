@@ -13,3 +13,5 @@ SLACK_WEBHOOK_URL=
 ENV=production
 GRAVITY_WEBSOCKET_URL=wss://api.gravitycloud.ai
 GIT_BRANCHES_ALLOWED=main,staging,feat-.*
+ARGOCD_URL=http://argocd-server.argocd.svc.cluster.local
+ARGOCD_TOKEN=XXXX

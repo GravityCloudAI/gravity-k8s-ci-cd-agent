@@ -10,6 +10,7 @@ import { v4 } from 'uuid'
 import os from "os"
 import path from "path"
 import { io, Socket } from 'socket.io-client'
+import { syncArgoCD } from "./argocdHelper"
 
 interface ServiceChange {
 	servicePath: string
@@ -666,6 +667,10 @@ const syncGitRepo = async () => {
 
 													// delete the temporary file
 													fs.unlinkSync(localFilePath)
+
+													await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+													// if the s3 file url remains the same, then how to tell argo cd to use it
+
 												} catch (error) {
 													console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])

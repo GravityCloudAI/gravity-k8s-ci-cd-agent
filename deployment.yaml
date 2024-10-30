@@ -66,17 +66,21 @@ spec:
               value: "${POSTGRES_PORT:-5432}"
             - name: SLACK_WEBHOOK_URL # OPTIONAL: To send notifications to Slack
               value: "${SLACK_WEBHOOK_URL}"
+            - name: ARGOCD_URL
+              value: "${ARGOCD_URL}"
+            - name: ARGOCD_TOKEN
+              value: "${ARGOCD_TOKEN}"
           resources:
             requests:
-              memory: "2048Mi"
-              cpu: "1000m"
+              memory: "512Mi"
+              cpu: "512m"
             limits:
-              memory: "4096Mi"
-              cpu: "2000m"
+              memory: "8192Mi"
+              cpu: "4000m"
       volumes:
         - name: buildah-storage
           emptyDir:
-            sizeLimit: 10Gi
+            sizeLimit: 50Gi
         - name: cgroup
           hostPath:
             path: /sys/fs/cgroup
