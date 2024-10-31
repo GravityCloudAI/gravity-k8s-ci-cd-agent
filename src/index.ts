@@ -461,7 +461,12 @@ const syncGitRepo = async () => {
 
 				console.log(`Check if processed: ${checkIfProcessed?.rows?.length}`)
 
-				if (checkIfProcessed?.rows?.length > 0 && latestDeployRun?.run_attempt === 1) {
+				if (checkIfProcessed?.rows?.length > 0) {
+					if (latestDeployRun?.run_attempt > 1 && checkIfProcessed?.rows[0]?.status !== "FAILED") {
+						console.log("Run already processed, skipping.")
+						return
+					}
+
 					if (checkIfProcessed?.rows[0]?.status === "IN_PROGRESS") {
 						console.log("Current run is already in progress, skipping.")
 					} else {
