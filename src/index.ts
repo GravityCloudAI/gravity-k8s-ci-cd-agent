@@ -19,6 +19,17 @@ interface ServiceChange {
 	lastCommitSha?: string
 }
 
+interface DeployRun {
+	id: string;
+	head_branch: string;
+	head_sha: string;
+	head_commit: any;
+	status: string;
+	actor: any;
+	created_at: string;
+	run_attempt: number;
+}
+
 const pool = new Pool({
 	host: process.env.POSTGRES_HOST,
 	database: process.env.POSTGRES_DB,
@@ -165,7 +176,7 @@ const syncLogsToGravityViaWebsocket = async (runId: string, action: string, mess
 const customExec = (runId: string, action: string, command: string, skipLogging: boolean = false): Promise<string> => {
 	return new Promise((resolve, reject) => {
 
-		const cleanedCommand = command.replace(/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|DOCKER_USERNAME)=[^\s]*/g, "$1=****")
+		const cleanedCommand = command.replace(/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|DOCKER_USERNAME)=[^\s]*/g, "$1=****").replace(/x-access-token:[^@]*@/g, "x-access-token:****@")
 		console.log(`Executing command: ${cleanedCommand}`)
 		const process = spawn(command, [], { shell: true })
 
@@ -384,6 +395,37 @@ const syncGitRepo = async () => {
 					}
 				})
 
+				const completedRuns = githubActionsStatus.data.workflow_runs
+					.filter((run: any) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
+					.reduce((acc: { [key: string]: any }, run: any) => {
+						const branch = run.head_branch;
+						if (!acc[branch] || new Date(run.created_at) > new Date(acc[branch].created_at)) {
+							acc[branch] = run;
+						}
+						return acc;
+					}, {});
+
+				for (const [branch, latestDeployRun] of Object.entries(completedRuns) as [string, DeployRun][]) {
+					console.log(`Processing latest deploy run for branch ${branch}: ${latestDeployRun.id}`);
+
+					const gitBranchesAllowed = process.env.GIT_BRANCHES_ALLOWED!!.split(",")
+					const branchMatches = gitBranchesAllowed.some(allowedBranch => {
+						if (allowedBranch.endsWith('.*')) {
+							const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+							const pattern = new RegExp(`^${prefix}.*$`)
+							return pattern.test(branch)
+						}
+						return allowedBranch === branch
+					})
+
+					if (!branchMatches) {
+						console.log(`Branch ${branch} not in allowed list, skipping`)
+						continue;
+					}
+
+					// MOVE THE BRANCH RUN HERE
+				}
+
 				const latestDeployRun = githubActionsStatus.data.workflow_runs
 					.filter((run: any) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
 					.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
@@ -419,9 +461,16 @@ const syncGitRepo = async () => {
 
 				console.log(`Check if processed: ${checkIfProcessed?.rows?.length}`)
 
-				if (checkIfProcessed?.rows?.length > 0) {
-					console.log("Run already processed, skipping.")
-					return
+				if (checkIfProcessed?.rows?.length > 0 && latestDeployRun?.run_attempt === 1) {
+					if (checkIfProcessed?.rows[0]?.status === "IN_PROGRESS") {
+						console.log("Current run is already in progress, skipping.")
+					} else {
+						console.log(`Run already processed with status ${checkIfProcessed?.rows[0]?.status}, skipping.`)
+						if (checkIfProcessed?.rows[0]?.status === "FAILED") {
+							console.log("To re-run the agent job, trigger the workflow manually.")
+						}
+						return
+					}
 				}
 
 				// Find services with changes
