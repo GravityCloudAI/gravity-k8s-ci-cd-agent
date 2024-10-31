@@ -469,8 +469,8 @@ const syncGitRepo = async () => {
 						if (checkIfProcessed?.rows[0]?.status === "FAILED") {
 							console.log("To re-run the agent job, trigger the workflow manually.")
 						}
-						return
 					}
+					return
 				}
 
 				// Find services with changes
