@@ -841,5 +841,4 @@ const cleanup = async () => {
 process.on('SIGTERM', cleanup);
 process.on('SIGINT', cleanup);
 
-syncGitRepo()
-// setInterval(syncGitRepo, 30000)
+setInterval(syncGitRepo, 30000)
