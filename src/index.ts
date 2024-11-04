@@ -421,406 +421,392 @@ const syncGitRepo = async () => {
 					if (!branchMatches) {
 						console.log(`Branch ${branch} not in allowed list, skipping`)
 						continue;
-					}
-
-					// MOVE THE BRANCH RUN HERE
-				}
-
-				const latestDeployRun = githubActionsStatus.data.workflow_runs
-					.filter((run: any) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
-					.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
-
-				if (!latestDeployRun) {
-					console.log(`No completed deploy run found for ${repository}, skipping`)
-					return
-				}
-
-				console.log(`Latest deploy run: ${latestDeployRun.id}`)
-
-				// Check allowed branches
-				const gitBranchesAllowed = process.env.GIT_BRANCHES_ALLOWED!!.split(",")
-				const branchMatches = gitBranchesAllowed.some(allowedBranch => {
-					if (allowedBranch.endsWith('.*')) {
-						const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-						const pattern = new RegExp(`^${prefix}.*$`)
-						return pattern.test(latestDeployRun.head_branch)
-					}
-					return allowedBranch === latestDeployRun.head_branch
-				})
-
-				if (!branchMatches) {
-					console.log(`Branch ${latestDeployRun.head_branch} not in allowed list, skipping`)
-					return
-				}
-
-				// Check if already processed. Any state is fine, COMPLETED, FAILED, IN_PROGRESS. We do not auto-run the failed runs.
-				const checkIfProcessed = await client?.query(
-					"SELECT * FROM deployments WHERE actionId = $1",
-					[latestDeployRun.id]
-				)
-
-				console.log(`Check if processed: ${checkIfProcessed?.rows?.length}`)
-
-				if (checkIfProcessed?.rows?.length > 0) {
-					if (latestDeployRun?.run_attempt > 1 && checkIfProcessed?.rows[0]?.status !== "FAILED") {
-						console.log("Run already processed, skipping.")
-						return
-					}
-
-					if (checkIfProcessed?.rows[0]?.status === "IN_PROGRESS") {
-						console.log("Current run is already in progress, skipping.")
 					} else {
-						console.log(`Run already processed with status ${checkIfProcessed?.rows[0]?.status}, skipping.`)
-						if (checkIfProcessed?.rows[0]?.status === "FAILED") {
-							console.log("To re-run the agent job, trigger the workflow manually.")
+						// check if the latestDeployRun was within 30 minutes
+						if (new Date(latestDeployRun.created_at).getTime() > Date.now() - 30 * 60 * 1000) {
+							console.log(`Branch ${branch} matches, processing`)
+						} else {
+							console.log(`Branch ${branch} matches, but not within 30 minutes, skipping`)
+							continue
 						}
 					}
-					return
-				}
 
-				// Find services with changes
-				const services = await findServicesWithChanges(
-					octokit,
-					owner,
-					repo,
-					latestDeployRun.head_branch,
-					latestDeployRun.head_sha
-				)
+					// Check if already processed. Any state is fine, COMPLETED, FAILED, IN_PROGRESS. We do not auto-run the failed runs.
+					const checkIfProcessed = await client?.query(
+						"SELECT * FROM deployments WHERE actionId = $1",
+						[latestDeployRun.id]
+					)
 
-				console.log(`Services with changes: ${services.length}`)
+					console.log(`Check if processed: ${checkIfProcessed?.rows?.length}`)
 
-				if (services.length === 0) {
-					console.log(`No services with changes found, skipping`)
-					return
-				}
-
-				const deploymentRunId = v4()
-
-				const userDetails = {
-					id: latestDeployRun?.actor?.id,
-					login: latestDeployRun?.actor?.login,
-					avatar_url: latestDeployRun?.actor?.avatar_url,
-					html_url: latestDeployRun?.actor?.html_url,
-					type: latestDeployRun?.actor?.type
-				}
-
-				const destinations = new Set<string>()
-				const regionsSet = new Set<string>()
-
-				for (const service of services) {
-					if (service.gravityConfig?.spec?.aws) {
-						destinations.add("AWS")
-						await Promise.all(service.gravityConfig?.spec?.aws?.repository?.map(async (repoDetails: AWSRepository) => {
-							const awsRepositoryRegions = repoDetails?.regions
-							awsRepositoryRegions.forEach((region) => regionsSet.add(region))
-						}))
-					}
-				}
-
-				await client?.query(
-					`INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, service_path, commit_sha, status, destinations, regions, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-					[
-						deploymentRunId,
-						latestDeployRun.id,
-						latestDeployRun.head_commit.id,
-						repository,
-						latestDeployRun.head_branch,
-						services?.map((service) => service.servicePath).join(','),
-						latestDeployRun.head_sha,
-						"IN_PROGRESS",
-						Array.from(destinations).join(','),
-						Array.from(regionsSet).join(','),
-						latestDeployRun.actor.id,
-						JSON.stringify(userDetails)
-					]
-				)
-
-				progressTracker.set(deploymentRunId, "IN_PROGRESS")
-
-				syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath), destinations: Array.from(destinations), regions: Array.from(regionsSet) }))
-
-				// Process each changed service
-				for (const service of services) {
-					try {
-						if (!service.hasChanges) {
-							console.log(`No changes found for service ${service.servicePath}, skipping`)
+					if (checkIfProcessed?.rows?.length > 0) {
+						if (latestDeployRun?.run_attempt > 1 && checkIfProcessed?.rows[0]?.status !== "FAILED") {
+							console.log("Run already processed, skipping.")
 							return
 						}
 
-						const serviceName = service.servicePath === '.' ?
-							service.gravityConfig.metadata.name :
-							path.basename(service.servicePath)
-
-						// Clone repository
-						const tempDir = os.tmpdir()
-						const gitRepoPath = path.join(tempDir, `${repository.replace('/', '-')}-${serviceName}`)
-
-						// Clean up existing directory if it exists
-						if (fs.existsSync(gitRepoPath)) {
-							fs.rmSync(gitRepoPath, { recursive: true, force: true })
+						if (checkIfProcessed?.rows[0]?.status === "IN_PROGRESS") {
+							console.log("Current run is already in progress, skipping.")
+						} else {
+							console.log(`Run already processed with status ${checkIfProcessed?.rows[0]?.status}, skipping.`)
+							if (checkIfProcessed?.rows[0]?.status === "FAILED") {
+								console.log("To re-run the agent job, trigger the workflow manually.")
+							}
 						}
+						return
+					}
 
-						// Create fresh directory
-						fs.mkdirSync(gitRepoPath, { recursive: true })
+					// Find services with changes
+					const services = await findServicesWithChanges(
+						octokit,
+						owner,
+						repo,
+						latestDeployRun.head_branch,
+						latestDeployRun.head_sha
+					)
 
-						const cloneUrl = `https://x-access-token:${githubToken}@github.com/${repository}.git`
-						await customExec(deploymentRunId, "GIT_CLONE", `git clone ${cloneUrl} ${gitRepoPath}`)
+					console.log(`Services with changes: ${services.length}`)
 
-						const lastRunBranch = latestDeployRun.head_branch
+					if (services.length === 0) {
+						console.log(`No services with changes found, skipping`)
+						return
+					}
 
-						sendSlackNotification("Docker Build Started", `Docker build started for for ${serviceName} / ${lastRunBranch} in ${repository}`)
+					const deploymentRunId = v4()
 
-						// Build Docker image
-						let dockerBuildCli = process.env.ENV === "production" ? "buildah --storage-driver vfs" : "docker"
-						const serviceContext = path.join(gitRepoPath, service.servicePath)
-						const dockerfilePath = path.join(serviceContext, 'Dockerfile')
+					const userDetails = {
+						id: latestDeployRun?.actor?.id,
+						login: latestDeployRun?.actor?.login,
+						avatar_url: latestDeployRun?.actor?.avatar_url,
+						html_url: latestDeployRun?.actor?.html_url,
+						type: latestDeployRun?.actor?.type
+					}
 
-						const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+					const destinations = new Set<string>()
+					const regionsSet = new Set<string>()
 
-						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand)
-
-						sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
-
-						// Continue with existing AWS deployment logic
-						const newValuesFiles: string[] = []
-
+					for (const service of services) {
 						if (service.gravityConfig?.spec?.aws) {
-							// push the docker image for each aws repository
+							destinations.add("AWS")
 							await Promise.all(service.gravityConfig?.spec?.aws?.repository?.map(async (repoDetails: AWSRepository) => {
-								try {
-									const awsRepositoryName = repoDetails?.name
-									const awsRepositoryRegions = repoDetails?.regions
-									const awsRepositoryBranch = repoDetails?.branch
-
-									// check if the branch is the same as the last run branch
-									if (awsRepositoryBranch !== lastRunBranch) {
-										// check if the branch is a wildcard pattern
-										if (awsRepositoryBranch.endsWith('.*')) {
-											// convert wildcard pattern to regex
-											const prefix = awsRepositoryBranch.slice(0, -2)
-											const pattern = new RegExp(`^${prefix}.*$`)
-											if (!pattern.test(lastRunBranch)) {
-												console.log(`Branch ${lastRunBranch} does not match pattern ${awsRepositoryBranch}, skipping deployment`)
-												return
-											}
-										} else {
-											console.log(`Branch ${lastRunBranch} does not match ${awsRepositoryBranch}, skipping deployment`)
-											return
-										}
-									}
-
-									await Promise.all(awsRepositoryRegions.map(async (region) => {
-										try {
-											const ecrBaseURL = `${process.env.AWS_ACCOUNT_ID}.dkr.ecr.${region}.amazonaws.com`
-
-											// check if the ecr repository exists, if not create it
-											try {
-												await customExec(deploymentRunId, "ECR_REPOSITORY_CHECK", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`)
-											} catch (error) {
-												console.error(`Error checking if repository ${awsRepositoryName} exists: ${error}`)
-												console.log("Creating repository...")
-												await customExec(deploymentRunId, "ECR_REPOSITORY_CREATE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`)
-											}
-
-											const imageTag = `${latestDeployRun.head_sha?.slice(0, 7)}-${lastRunBranch}`
-
-											// tag the docker image with the aws repository name and region
-											const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-											await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", dockerTagCommand)
-
-											const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-											await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", dockerPushCommand)
-
-											await customExec(deploymentRunId, "DOCKER_LOGOUT", `${dockerBuildCli} logout ${ecrBaseURL}`)
-
-											sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
-
-											if (repoDetails?.valueFile?.source === "git") {
-												const valueFileName = `${serviceName}-values-${lastRunBranch}-${region}.yaml`
-
-												try {
-													let valuesFilePath = findFile(path.join(gitRepoPath, service.servicePath), valueFileName)
-
-													if (!valuesFilePath) {
-														console.error(`Values file ${valueFileName} not found`)
-														return
-													}
-
-													const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
-
-													const parsedValuesFile = yaml.parse(valuesFileContent);
-													if (!updateImageTag(parsedValuesFile, imageTag)) {
-														console.error('Error: No image.tag pattern found in values file');
-														return
-													}
-
-													const relativePath = path.relative(gitRepoPath, valuesFilePath)
-
-													// Fetch the current file to get its SHA
-													const { data: currentFile } = await octokit.repos.getContent({
-														owner,
-														repo,
-														path: relativePath,
-														ref: lastRunBranch
-													})
-
-													if (Array.isArray(currentFile)) {
-														console.error(`${relativePath} is a directory, not a file`)
-														return
-													}
-
-													// this method does not trigger workflow dispatch event
-													await octokit.repos.createOrUpdateFileContents({
-														owner,
-														repo,
-														path: relativePath,
-														message: `[skip ci] Updated values file for ${lastRunBranch} in ${region} for deployment ${latestDeployRun.id}`,
-														content: Buffer.from(yaml.stringify(parsedValuesFile)).toString('base64'),
-														sha: currentFile.sha,
-														branch: lastRunBranch
-													})
-
-													console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`)
-													sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
-
-													newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
-												} catch (error) {
-													console.error(`Error updating ${valueFileName}: ${error}`)
-													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-													progressTracker.set(deploymentRunId, "FAILED")
-													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
-													sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}: ${error}`)
-												}
-											} else if (repoDetails?.valueFile?.source === "s3") {
-												try {
-													let valueFilesPath = repoDetails?.valueFile?.bucket
-													let s3BucketName = valueFilesPath
-													let s3Prefix = ''
-
-													if (valueFilesPath?.includes('/')) {
-														const parts = valueFilesPath.split('/')
-														s3BucketName = parts[0]
-
-														const processedParts = parts.slice(1).map(part => {
-															if (part.endsWith('.*')) {
-																return lastRunBranch
-															}
-															return part
-														})
-
-														s3Prefix = processedParts.join('/')
-													}
-
-													let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
-													if (!latestValueFileFromS3Bucket) {
-														console.error(`No value file found in ${valueFilesPath}`)
-														return
-													}
-
-													latestValueFileFromS3Bucket = latestValueFileFromS3Bucket.trim()
-
-													const tempDir = os.tmpdir()
-													const localFilePath = path.join(tempDir, path.basename(latestValueFileFromS3Bucket))
-
-													await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} ${localFilePath}`, true)
-
-													const valuesFileContent = fs.readFileSync(localFilePath, 'utf8')
-
-													if (!valuesFileContent) {
-														console.error(`Error getting values file content from ${valueFilesPath}`)
-														return
-													}
-
-													let parsedValuesFile = yaml.parse(valuesFileContent)
-													parsedValuesFile.image.tag = imageTag
-
-													// create a temporary file with the new values file content with same name as the original one
-													fs.writeFileSync(localFilePath, yaml.stringify(parsedValuesFile))
-
-													// upload the temporary file to the s3 bucket
-													try {
-														console.log(`Updating S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${latestValueFileFromS3Bucket}`)
-
-														// First, delete the existing file
-														console.log(`Deleting existing S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${latestValueFileFromS3Bucket}`)
-
-														const s3DeleteCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 rm s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`
-														await customExec(deploymentRunId, "DELETING_S3_FILE", s3DeleteCommand, true)
-														console.log(`Successfully deleted existing S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
-
-														// Then, upload the new file
-														console.log(`Uploading new S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
-
-														const s3UploadCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp ${localFilePath} s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`
-														await customExec(deploymentRunId, "UPLOADING_S3_FILE", s3UploadCommand, true)
-														console.log(`Successfully uploaded new values file to S3 bucket: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
-
-														sendSlackNotification("S3 Values File Updated", `Updated ${path.basename(latestValueFileFromS3Bucket)} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
-
-													} catch (error) {
-														console.error(`Failed to update values file in S3 bucket: ${error}`)
-														await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-														progressTracker.set(deploymentRunId, "FAILED")
-														syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: `S3 file update failed: ${error.message}` }), true)
-														sendSlackNotification("Values File Update Failed", `Error updating values file in S3 bucket for ${lastRunBranch} in ${region}: ${error}`)
-														throw error
-													}
-
-													newValuesFiles.push(JSON.stringify({ name: path.basename(latestValueFileFromS3Bucket), previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
-
-													// delete the temporary file
-													fs.unlinkSync(localFilePath)
-
-													await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
-													sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
-
-												} catch (error) {
-													console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
-													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-													progressTracker.set(deploymentRunId, "FAILED")
-													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
-													sendSlackNotification("S3 File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`)
-												}
-											}
-
-										} catch (error) {
-											console.error(`Error processing region ${region}: ${error}`)
-											await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-											progressTracker.set(deploymentRunId, "FAILED")
-											syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
-											sendSlackNotification("Deployment Failed", `Error processing region ${region} for ${repository}: ${error}`)
-										}
-									}))
-								} catch (error) {
-									console.error(`Error processing AWS repository ${repoDetails.name}: ${error}`)
-									console.error('Stack trace:', error.stack)
-									await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-									progressTracker.set(deploymentRunId, "FAILED")
-									syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
-									sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`)
-								}
+								const awsRepositoryRegions = repoDetails?.regions
+								awsRepositoryRegions.forEach((region) => regionsSet.add(region))
 							}))
 						}
+					}
 
-						// Update deployment status
-						await client?.query(
-							"UPDATE deployments SET values_files = $1, status = $2 WHERE runId = $3",
-							[JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
-						)
+					await client?.query(
+						`INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, service_path, commit_sha, status, destinations, regions, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+						[
+							deploymentRunId,
+							latestDeployRun.id,
+							latestDeployRun.head_commit.id,
+							repository,
+							latestDeployRun.head_branch,
+							services?.map((service) => service.servicePath).join(','),
+							latestDeployRun.head_sha,
+							"IN_PROGRESS",
+							Array.from(destinations).join(','),
+							Array.from(regionsSet).join(','),
+							latestDeployRun.actor.id,
+							JSON.stringify(userDetails)
+						]
+					)
 
-						progressTracker.delete(deploymentRunId)
-						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", JSON.stringify({ newValuesFiles }), false)
+					progressTracker.set(deploymentRunId, "IN_PROGRESS")
 
-						// Cleanup
-						if (fs.existsSync(gitRepoPath)) {
-							fs.rmSync(gitRepoPath, { recursive: true, force: true })
+					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath), destinations: Array.from(destinations), regions: Array.from(regionsSet) }))
+
+					// Process each changed service
+					for (const service of services) {
+						try {
+							if (!service.hasChanges) {
+								console.log(`No changes found for service ${service.servicePath}, skipping`)
+								return
+							}
+
+							const serviceName = service.servicePath === '.' ?
+								service.gravityConfig.metadata.name :
+								path.basename(service.servicePath)
+
+							// Clone repository
+							const tempDir = os.tmpdir()
+							const gitRepoPath = path.join(tempDir, `${repository.replace('/', '-')}-${serviceName}`)
+
+							// Clean up existing directory if it exists
+							if (fs.existsSync(gitRepoPath)) {
+								fs.rmSync(gitRepoPath, { recursive: true, force: true })
+							}
+
+							// Create fresh directory
+							fs.mkdirSync(gitRepoPath, { recursive: true })
+
+							const cloneUrl = `https://x-access-token:${githubToken}@github.com/${repository}.git`
+							await customExec(deploymentRunId, "GIT_CLONE", `git clone ${cloneUrl} ${gitRepoPath}`)
+
+							const lastRunBranch = latestDeployRun.head_branch
+
+							if (service.gravityConfig?.spec?.preDeploy) {
+								await Promise.all(service.gravityConfig?.spec?.preDeploy?.map(async (preDeployStep: any) => {
+									sendSlackNotification("Running Pre Deploy Command", `${preDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
+									await customExec(deploymentRunId, "PRE_DEPLOY_STEP", `cd ${gitRepoPath} && ${preDeployStep.command}`)
+								}))
+							}
+
+							sendSlackNotification("Docker Build Started", `Docker build started for ${serviceName} / ${lastRunBranch} in ${repository}`)
+
+							// Build Docker image
+							let dockerBuildCli = process.env.ENV === "production" ? "buildah --storage-driver vfs" : "docker"
+							const serviceContext = path.join(gitRepoPath, service.servicePath)
+							const dockerfilePath = path.join(serviceContext, 'Dockerfile')
+
+							const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+
+							await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand)
+
+							sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
+
+							// Continue with existing AWS deployment logic
+							const newValuesFiles: string[] = []
+
+							if (service.gravityConfig?.spec?.aws) {
+								// push the docker image for each aws repository
+								await Promise.all(service.gravityConfig?.spec?.aws?.repository?.map(async (repoDetails: AWSRepository) => {
+									try {
+										const awsRepositoryName = repoDetails?.name
+										const awsRepositoryRegions = repoDetails?.regions
+										const awsRepositoryBranch = repoDetails?.branch
+
+										// check if the branch is the same as the last run branch
+										if (awsRepositoryBranch !== lastRunBranch) {
+											// check if the branch is a wildcard pattern
+											if (awsRepositoryBranch.endsWith('.*')) {
+												// convert wildcard pattern to regex
+												const prefix = awsRepositoryBranch.slice(0, -2)
+												const pattern = new RegExp(`^${prefix}.*$`)
+												if (!pattern.test(lastRunBranch)) {
+													console.log(`Branch ${lastRunBranch} does not match pattern ${awsRepositoryBranch}, skipping deployment`)
+													return
+												}
+											} else {
+												console.log(`Branch ${lastRunBranch} does not match ${awsRepositoryBranch}, skipping deployment`)
+												return
+											}
+										}
+
+										await Promise.all(awsRepositoryRegions.map(async (region) => {
+											try {
+												const ecrBaseURL = `${process.env.AWS_ACCOUNT_ID}.dkr.ecr.${region}.amazonaws.com`
+
+												// check if the ecr repository exists, if not create it
+												try {
+													await customExec(deploymentRunId, "ECR_REPOSITORY_CHECK", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`)
+												} catch (error) {
+													console.error(`Error checking if repository ${awsRepositoryName} exists: ${error}`)
+													console.log("Creating repository...")
+													await customExec(deploymentRunId, "ECR_REPOSITORY_CREATE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`)
+												}
+
+												const imageTag = `${latestDeployRun.head_sha?.slice(0, 7)}-${lastRunBranch}`
+
+												// tag the docker image with the aws repository name and region
+												const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
+												await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", dockerTagCommand)
+
+												const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
+												await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", dockerPushCommand)
+
+												await customExec(deploymentRunId, "DOCKER_LOGOUT", `${dockerBuildCli} logout ${ecrBaseURL}`)
+
+												sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
+
+												if (repoDetails?.valueFile?.source === "git") {
+													const valueFileName = `${serviceName}-values-${lastRunBranch}-${region}.yaml`
+
+													try {
+														let valuesFilePath = findFile(path.join(gitRepoPath, service.servicePath), valueFileName)
+
+														if (!valuesFilePath) {
+															console.error(`Values file ${valueFileName} not found`)
+															return
+														}
+
+														const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
+
+														const parsedValuesFile = yaml.parse(valuesFileContent);
+														if (!updateImageTag(parsedValuesFile, imageTag)) {
+															console.error('Error: No image.tag pattern found in values file');
+															return
+														}
+
+														const relativePath = path.relative(gitRepoPath, valuesFilePath)
+
+														// Fetch the current file to get its SHA
+														const { data: currentFile } = await octokit.repos.getContent({
+															owner,
+															repo,
+															path: relativePath,
+															ref: lastRunBranch
+														})
+
+														if (Array.isArray(currentFile)) {
+															console.error(`${relativePath} is a directory, not a file`)
+															return
+														}
+
+														// this method does not trigger workflow dispatch event
+														await octokit.repos.createOrUpdateFileContents({
+															owner,
+															repo,
+															path: relativePath,
+															message: `[skip ci] Updated values file for ${lastRunBranch} in ${region} for deployment ${latestDeployRun.id}`,
+															content: Buffer.from(yaml.stringify(parsedValuesFile)).toString('base64'),
+															sha: currentFile.sha,
+															branch: lastRunBranch
+														})
+
+														console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`)
+														sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
+
+														newValuesFiles.push(JSON.stringify({ name: valueFileName, previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
+													} catch (error) {
+														console.error(`Error updating ${valueFileName}: ${error}`)
+														await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+														progressTracker.set(deploymentRunId, "FAILED")
+														syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+														sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}: ${error}`)
+													}
+												} else if (repoDetails?.valueFile?.source === "s3") {
+													try {
+														let valueFilesPath = repoDetails?.valueFile?.bucket
+														let s3BucketName = valueFilesPath
+														let s3Prefix = ''
+
+														if (valueFilesPath?.includes('/')) {
+															const parts = valueFilesPath.split('/')
+															s3BucketName = parts[0]
+
+															const processedParts = parts.slice(1).map(part => {
+																if (part.endsWith('.*')) {
+																	return lastRunBranch
+																}
+																return part
+															})
+
+															s3Prefix = processedParts.join('/')
+														}
+
+														let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+														if (!latestValueFileFromS3Bucket) {
+															console.error(`No value file found in ${valueFilesPath}`)
+															return
+														}
+
+														latestValueFileFromS3Bucket = latestValueFileFromS3Bucket.trim()
+
+														const tempDir = os.tmpdir()
+														const localFilePath = path.join(tempDir, path.basename(latestValueFileFromS3Bucket))
+
+														await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} ${localFilePath}`, true)
+
+														const valuesFileContent = fs.readFileSync(localFilePath, 'utf8')
+
+														if (!valuesFileContent) {
+															console.error(`Error getting values file content from ${valueFilesPath}`)
+															return
+														}
+
+														let parsedValuesFile = yaml.parse(valuesFileContent)
+														parsedValuesFile.image.tag = imageTag
+
+														// create a temporary file with the new values file content with same name as the original one
+														fs.writeFileSync(localFilePath, yaml.stringify(parsedValuesFile))
+
+														// upload the temporary file to the s3 bucket
+														try {
+															console.log(`Updating S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${latestValueFileFromS3Bucket}`)
+
+															// First, delete the existing file
+															console.log(`Deleting existing S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${latestValueFileFromS3Bucket}`)
+
+															const s3DeleteCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 rm s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`
+															await customExec(deploymentRunId, "DELETING_S3_FILE", s3DeleteCommand, true)
+															console.log(`Successfully deleted existing S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
+
+															// Then, upload the new file
+															console.log(`Uploading new S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
+
+															const s3UploadCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp ${localFilePath} s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`
+															await customExec(deploymentRunId, "UPLOADING_S3_FILE", s3UploadCommand, true)
+															console.log(`Successfully uploaded new values file to S3 bucket: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
+
+															sendSlackNotification("S3 Values File Updated", `Updated ${path.basename(latestValueFileFromS3Bucket)} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
+
+														} catch (error) {
+															console.error(`Failed to update values file in S3 bucket: ${error}`)
+															await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+															progressTracker.set(deploymentRunId, "FAILED")
+															syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: `S3 file update failed: ${error.message}` }), true)
+															sendSlackNotification("Values File Update Failed", `Error updating values file in S3 bucket for ${lastRunBranch} in ${region}: ${error}`)
+															throw error
+														}
+
+														newValuesFiles.push(JSON.stringify({ name: path.basename(latestValueFileFromS3Bucket), previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
+
+														// delete the temporary file
+														fs.unlinkSync(localFilePath)
+
+														await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+														sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
+
+													} catch (error) {
+														console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
+														await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+														progressTracker.set(deploymentRunId, "FAILED")
+														syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+														sendSlackNotification("S3 File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`)
+													}
+												}
+
+											} catch (error) {
+												console.error(`Error processing region ${region}: ${error}`)
+												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+												progressTracker.set(deploymentRunId, "FAILED")
+												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+												sendSlackNotification("Deployment Failed", `Error processing region ${region} for ${repository}: ${error}`)
+											}
+										}))
+									} catch (error) {
+										console.error(`Error processing AWS repository ${repoDetails.name}: ${error}`)
+										console.error('Stack trace:', error.stack)
+										await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+										progressTracker.set(deploymentRunId, "FAILED")
+										syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+										sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`)
+									}
+								}))
+							}
+
+							// Update deployment status
+							await client?.query(
+								"UPDATE deployments SET values_files = $1, status = $2 WHERE runId = $3",
+								[JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
+							)
+
+							progressTracker.delete(deploymentRunId)
+							syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", JSON.stringify({ newValuesFiles }), false)
+
+							// Cleanup
+							if (fs.existsSync(gitRepoPath)) {
+								fs.rmSync(gitRepoPath, { recursive: true, force: true })
+							}
+						} catch (error) {
+							console.error(`Error processing service ${service.servicePath}: ${error}`)
+							await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
+							progressTracker.set(deploymentRunId, "FAILED")
+							syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+							sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 						}
-					} catch (error) {
-						console.error(`Error processing service ${service.servicePath}: ${error}`)
-						await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-						progressTracker.set(deploymentRunId, "FAILED")
-						syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
-						sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 					}
 				}
 			} catch (error) {
@@ -855,4 +841,5 @@ const cleanup = async () => {
 process.on('SIGTERM', cleanup);
 process.on('SIGINT', cleanup);
 
-setInterval(syncGitRepo, 30000)
+syncGitRepo()
+// setInterval(syncGitRepo, 30000)
