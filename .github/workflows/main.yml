@@ -7,7 +7,7 @@ on:
 jobs:
   buildAndDeploy:
     name: Build and Deploy
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout & Build
         uses: actions/checkout@v4
