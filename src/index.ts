@@ -717,8 +717,11 @@ const syncGitRepo = async () => {
 															return
 														}
 
-														let parsedValuesFile = yaml.parse(valuesFileContent)
-														parsedValuesFile.image.tag = imageTag
+														const parsedValuesFile = yaml.parse(valuesFileContent);
+														if (!updateImageTag(parsedValuesFile, imageTag)) {
+															console.error('Error: No image.tag pattern found in values file');
+															return
+														}
 
 														// create a temporary file with the new values file content with same name as the original one
 														fs.writeFileSync(localFilePath, yaml.stringify(parsedValuesFile))
