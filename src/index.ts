@@ -21,12 +21,13 @@ interface ServiceChange {
 
 interface DeployRun {
 	id: string;
+	name: string;
 	head_branch: string;
 	head_sha: string;
 	head_commit: any;
 	status: string;
 	actor: any;
-	created_at: string;
+	updated_at: string;
 	run_attempt: number;
 }
 
@@ -396,10 +397,10 @@ const syncGitRepo = async () => {
 				})
 
 				const completedRuns = githubActionsStatus.data.workflow_runs
-					.filter((run: any) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
-					.reduce((acc: { [key: string]: any }, run: any) => {
+					.filter((run: DeployRun) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
+					.reduce((acc: { [key: string]: DeployRun }, run: DeployRun) => {
 						const branch = run.head_branch;
-						if (!acc[branch] || new Date(run.created_at) > new Date(acc[branch].created_at)) {
+						if (!acc[branch] || new Date(run.updated_at) > new Date(acc[branch].updated_at)) {
 							acc[branch] = run;
 						}
 						return acc;
@@ -423,7 +424,7 @@ const syncGitRepo = async () => {
 						continue;
 					} else {
 						// check if the latestDeployRun was within 30 minutes
-						if (new Date(latestDeployRun.created_at).getTime() > Date.now() - 30 * 60 * 1000) {
+						if (new Date(latestDeployRun.updated_at).getTime() > Date.now() - 30 * 60 * 1000) {
 							console.log(`Branch ${branch} matches, processing`)
 						} else {
 							console.log(`Branch ${branch} matches, but not within 30 minutes, skipping`)
