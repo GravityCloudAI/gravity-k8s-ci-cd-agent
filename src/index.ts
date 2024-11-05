@@ -98,8 +98,8 @@ interface AWSRepository {
 	}
 }
 
-const syncArgoCD = async (appName: string, argoCDUrl: string, token: string) => {
-	const url = `${argoCDUrl}/api/v1/applications/${appName}?refresh=hard`
+const syncArgoCD = async (appName: string, branch: string, argoCDUrl: string, token: string) => {
+	const url = `${argoCDUrl}/api/v1/applications/${appName}-${branch}?refresh=hard`
 	try {
 		const response = await axios.get(url, {
 			headers: {
@@ -760,7 +760,7 @@ const syncGitRepo = async () => {
 														// delete the temporary file
 														fs.unlinkSync(localFilePath)
 
-														await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+														await syncArgoCD(serviceName, branch, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
 														sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
 
 													} catch (error) {
