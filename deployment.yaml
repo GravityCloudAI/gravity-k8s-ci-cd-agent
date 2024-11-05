@@ -13,6 +13,7 @@ spec:
       labels:
         app: gravity-ci-cd-agent
     spec:
+      serviceAccountName: gravity-ci-cd-agent-sa
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.28
@@ -40,6 +41,8 @@ spec:
               value: "${GRAVITY_API_KEY}"
             - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_WEBSOCKET_URL}"
+            - name: NAMESPACE
+              value: "${NAMESPACE:-gravity}"
             - name: ENV
               value: "${ENV}"
             - name: GITHUB_TOKEN
@@ -192,3 +195,9 @@ rules:
 - apiGroups: ["batch"]
   resources: ["jobs"]
   verbs: ["create"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gravity-ci-cd-agent-sa
+  namespace: gravity

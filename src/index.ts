@@ -26,7 +26,7 @@ interface DeployRun {
 	head_commit: any;
 	status: string;
 	actor: any;
-	created_at: string;
+	updated_at: string;
 	run_attempt: number;
 }
 
@@ -38,9 +38,6 @@ const pool = new Pool({
 	port: process.env.POSTGRES_PORT ? parseInt(process.env.POSTGRES_PORT) : 5432,
 })
 
-const progressTracker = new Map<string, string>()
-
-// Replace getDbConnection function
 async function getDbConnection() {
 	return await pool.connect()
 }
@@ -374,6 +371,109 @@ const sendSlackNotification = async (title: string, message: string) => {
 	await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` })
 }
 
+const sendDetailsToAgentJob = async (deploymentRunId: string, details: any) => {
+	// run kubectl command to create a new job with the details
+
+	// get current namespace
+	const currentNamespace = process.env.NAMESPACE || "gravity"
+  await customExec(deploymentRunId, "KUBECTL_CREATE_JOB", `
+    kubectl create -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gravity-job-agent
+  namespace: ${currentNamespace || "gravity"}
+spec:
+  template:
+    metadata:
+      labels:
+        app: gravity-job-agent
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: gravity-job-agent
+        image: gravitycloud/gravity-job-agent:latest
+        imagePullPolicy: Always
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - SYS_ADMIN
+        volumeMounts:
+        - name: buildah-storage
+          mountPath: /var/lib/containers
+        - name: cgroup
+          mountPath: /sys/fs/cgroup
+          readOnly: true
+        env:
+        - name: ENV
+          value: "${process.env.ENV}"
+        - name: GRAVITY_API_KEY
+          value: "${process.env.GRAVITY_API_KEY}"
+        - name: GRAVITY_WEBSOCKET_URL
+          value: "${process.env.GRAVITY_WEBSOCKET_URL}"
+        - name: GITHUB_TOKEN
+          value: "${process.env.GITHUB_TOKEN}"
+        - name: GITHUB_REPOSITORIES
+          value: "${process.env.GITHUB_REPOSITORIES}"
+        - name: GIT_BRANCHES_ALLOWED
+          value: "${process.env.GIT_BRANCHES_ALLOWED}"
+        - name: GITHUB_JOB_NAME
+          value: "${process.env.GITHUB_JOB_NAME}"
+        - name: AWS_ACCESS_KEY_ID
+          value: "${process.env.AWS_ACCESS_KEY_ID}"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "${process.env.AWS_SECRET_ACCESS_KEY}"
+        - name: AWS_ACCOUNT_ID
+          value: "${process.env.AWS_ACCOUNT_ID}"
+        - name: POSTGRES_HOST
+          value: "${process.env.POSTGRES_HOST}"
+        - name: POSTGRES_USER
+          value: "${process.env.POSTGRES_USER}"
+        - name: POSTGRES_PASSWORD
+          value: "${process.env.POSTGRES_PASSWORD}"
+        - name: POSTGRES_DB
+          value: "${process.env.POSTGRES_DB}"
+        - name: POSTGRES_PORT
+          value: "${process.env.POSTGRES_PORT || 5432}"
+        - name: SLACK_WEBHOOK_URL
+          value: "${process.env.SLACK_WEBHOOK_URL}"
+        - name: ARGOCD_URL
+          value: "${process.env.ARGOCD_URL}"
+        - name: ARGOCD_TOKEN
+          value: "${process.env.ARGOCD_TOKEN}"
+        - name: JOB_DATA
+          value: "${Buffer.from(JSON.stringify(details)).toString('base64')}"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "512m"
+          limits:
+            memory: "4096Mi"
+            cpu: "4000m"
+      volumes:
+      - name: buildah-storage
+        persistentVolumeClaim:
+          claimName: gravity-job-agent-pvc-${deploymentRunId?.slice(0, 4)}
+      - name: cgroup
+        hostPath:
+          path: /sys/fs/cgroup
+          type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gravity-job-agent-pvc-${deploymentRunId?.slice(0, 4)}
+  namespace: ${currentNamespace || "gravity"}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+EOF
+`)
+}
 
 const syncGitRepo = async () => {
 	let client: pg.PoolClient | null = null
@@ -423,7 +523,7 @@ const syncGitRepo = async () => {
 						continue;
 					} else {
 						// check if the latestDeployRun was within 30 minutes
-						if (new Date(latestDeployRun.created_at).getTime() > Date.now() - 30 * 60 * 1000) {
+						if (new Date(latestDeployRun.updated_at).getTime() > Date.now() - 30 * 60 * 1000) {
 							console.log(`Branch ${branch} matches, processing`)
 						} else {
 							console.log(`Branch ${branch} matches, but not within 30 minutes, skipping`)
@@ -495,29 +595,35 @@ const syncGitRepo = async () => {
 						}
 					}
 
-					await client?.query(
-						`INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, service_path, commit_sha, status, destinations, regions, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-						[
-							deploymentRunId,
-							latestDeployRun.id,
-							latestDeployRun.head_commit.id,
-							repository,
-							latestDeployRun.head_branch,
-							services?.map((service) => service.servicePath).join(','),
-							latestDeployRun.head_sha,
-							"IN_PROGRESS",
-							Array.from(destinations).join(','),
-							Array.from(regionsSet).join(','),
-							latestDeployRun.actor.id,
-							JSON.stringify(userDetails)
-						]
-					)
-
-					progressTracker.set(deploymentRunId, "IN_PROGRESS")
+					// await client?.query(
+					// 	`INSERT INTO deployments (runId, actionId, commit_id, repository_name, branch, service_path, commit_sha, status, destinations, regions, user_id, user_details) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+					// 	[
+					// 		deploymentRunId,
+					// 		latestDeployRun.id,
+					// 		latestDeployRun.head_commit.id,
+					// 		repository,
+					// 		latestDeployRun.head_branch,
+					// 		services?.map((service) => service.servicePath).join(','),
+					// 		latestDeployRun.head_sha,
+					// 		"IN_PROGRESS",
+					// 		Array.from(destinations).join(','),
+					// 		Array.from(regionsSet).join(','),
+					// 		latestDeployRun.actor.id,
+					// 		JSON.stringify(userDetails)
+					// 	]
+					// )
 
 					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath), destinations: Array.from(destinations), regions: Array.from(regionsSet) }))
 
+					// send the details to the agent job
+					await sendDetailsToAgentJob(deploymentRunId, { deploymentRunId, services, repository, latestDeployRun })
+
 					// Process each changed service
+
+					/**
+					 * 
+					 * 
+					 *  
 					for (const service of services) {
 						try {
 							if (!service.hasChanges) {
@@ -808,6 +914,9 @@ const syncGitRepo = async () => {
 							sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 						}
 					}
+
+
+					*/
 				}
 			} catch (error) {
 				console.error(`Error processing repository ${repository}:`, error)
@@ -822,23 +931,24 @@ const syncGitRepo = async () => {
 	}
 }
 
-const cleanup = async () => {
-	let client: pg.PoolClient | null = null
-	try {
-		client = await pool.connect()
-		await Promise.all(Array.from(progressTracker.entries()).map(async ([key, value]) => {
-			if (value === "IN_PROGRESS") {
-				await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", key])
-				syncLogsToGravityViaWebsocket(key, "PIPELINE_FAILED", JSON.stringify({ error: "Pod termination" }), true)
-			}
-		}))
-	} finally {
-		client?.release()
-	}
-	process.exit(0);
-};
+// const cleanup = async () => {
+// 	let client: pg.PoolClient | null = null
+// 	try {
+// 		client = await pool.connect()
+// 		await Promise.all(Array.from(progressTracker.entries()).map(async ([key, value]) => {
+// 			if (value === "IN_PROGRESS") {
+// 				await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", key])
+// 				syncLogsToGravityViaWebsocket(key, "PIPELINE_FAILED", JSON.stringify({ error: "Pod termination" }), true)
+// 			}
+// 		}))
+// 	} finally {
+// 		client?.release()
+// 	}
+// 	process.exit(0);
+// };
 
-process.on('SIGTERM', cleanup);
-process.on('SIGINT', cleanup);
+// process.on('SIGTERM', cleanup);
+// process.on('SIGINT', cleanup);
 
-setInterval(syncGitRepo, 30000)
+// setInterval(syncGitRepo, 30000)
+syncGitRepo()
