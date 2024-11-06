@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+      - develop
 
 jobs:
   buildAndDeploy:
@@ -38,5 +39,5 @@ jobs:
           context: ./
           file: ./Dockerfile
           push: true
-          tags: 'gravitycloud/gravity-ci-cd-agent:latest'
+          tags: ${{ github.ref == 'refs/heads/main' && 'gravitycloud/gravity-ci-cd-agent:latest' || 'gravitycloud/gravity-ci-cd-agent:dev' }}
           platforms: linux/amd64

@@ -17,32 +17,30 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.28
-          command: ['sh', '-c', 'until nc -z $POSTGRES_HOST 5432; do echo waiting for postgres; sleep 2; done;']
+          command:
+            [
+              "sh",
+              "-c",
+              "until nc -z $POSTGRES_HOST 5432 && nc -z $REDIS_HOST 6379; do echo waiting for postgres and redis; if ! nc -z $POSTGRES_HOST 5432; then echo postgres not ready; fi; if ! nc -z $REDIS_HOST 6379; then echo redis not ready; fi; sleep 2; done;",
+            ]
           env:
             - name: POSTGRES_HOST
               value: "${POSTGRES_HOST}"
+            - name: REDIS_HOST
+              value: "${REDIS_HOST}"
+            - name: POSTGRES_PORT
+              value: "${POSTGRES_PORT:-5432}"
+            - name: REDIS_PORT
+              value: "${REDIS_PORT:-6379}"
       containers:
         - name: gravity-ci-cd-agent
           image: gravitycloud/gravity-ci-cd-agent:latest
           imagePullPolicy: Always
-          securityContext:
-            privileged: true
-            capabilities:
-              add:
-                - SYS_ADMIN
-          volumeMounts:
-          - name: buildah-storage
-            mountPath: /var/lib/containers
-          - name: cgroup
-            mountPath: /sys/fs/cgroup
-            readOnly: true
           env:
             - name: GRAVITY_API_KEY # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_API_KEY}"
             - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_WEBSOCKET_URL}"
-            - name: NAMESPACE
-              value: "${NAMESPACE:-gravity}"
             - name: ENV
               value: "${ENV}"
             - name: GITHUB_TOKEN
@@ -69,7 +67,89 @@ spec:
               value: "${POSTGRES_DB}"
             - name: POSTGRES_PORT
               value: "${POSTGRES_PORT:-5432}"
-            - name: SLACK_WEBHOOK_URL # OPTIONAL: To send notifications to Slack
+            - name: REDIS_HOST
+              value: "${REDIS_HOST}"
+            - name: REDIS_PORT
+              value: "${REDIS_PORT:-6379}"
+            - name: REDIS_PASSWORD
+              value: "${REDIS_PASSWORD}"
+            - name: SLACK_WEBHOOK_URL
+              value: "${SLACK_WEBHOOK_URL}"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "512m"
+            limits:
+              memory: "8192Mi"
+              cpu: "4000m"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gravity-job-agent
+  namespace: gravity
+spec:
+  template:
+    metadata:
+      labels:
+        app: gravity-job-agent
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: gravity-job-agent
+          image: gravitycloud/gravity-ci-cd-agent:latest
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          volumeMounts:
+            - name: buildah-storage
+              mountPath: /var/lib/containers
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: true
+          env:
+            - name: GRAVITY_API_KEY # OPTIONAL: To sync logs, errors, and reports with Gravity UI
+              value: "${GRAVITY_API_KEY}"
+            - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
+              value: "${GRAVITY_WEBSOCKET_URL}"
+            - name: PROCESS_JOB
+              value: "true"
+            - name: ENV
+              value: "${ENV}"
+            - name: GITHUB_TOKEN
+              value: "${GITHUB_TOKEN}"
+            - name: GITHUB_REPOSITORIES
+              value: "${GITHUB_REPOSITORIES}"
+            - name: GIT_BRANCHES_ALLOWED
+              value: "${GIT_BRANCHES_ALLOWED}"
+            - name: GITHUB_JOB_NAME
+              value: "${GITHUB_JOB_NAME}"
+            - name: AWS_ACCESS_KEY_ID
+              value: "${AWS_ACCESS_KEY_ID}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "${AWS_SECRET_ACCESS_KEY}"
+            - name: AWS_ACCOUNT_ID
+              value: "${AWS_ACCOUNT_ID}"
+            - name: POSTGRES_HOST
+              value: "${POSTGRES_HOST}"
+            - name: POSTGRES_USER
+              value: "${POSTGRES_USER}"
+            - name: POSTGRES_PASSWORD
+              value: "${POSTGRES_PASSWORD}"
+            - name: POSTGRES_DB
+              value: "${POSTGRES_DB}"
+            - name: POSTGRES_PORT
+              value: "${POSTGRES_PORT:-5432}"
+            - name: REDIS_HOST
+              value: "${REDIS_HOST}"
+            - name: REDIS_PORT
+              value: "${REDIS_PORT:-6379}"
+            - name: REDIS_PASSWORD
+              value: "${REDIS_PASSWORD}"
+            - name: SLACK_WEBHOOK_URL
               value: "${SLACK_WEBHOOK_URL}"
             - name: ARGOCD_URL
               value: "${ARGOCD_URL}"
@@ -80,7 +160,7 @@ spec:
               memory: "512Mi"
               cpu: "512m"
             limits:
-              memory: "8192Mi"
+              memory: "4096Mi"
               cpu: "4000m"
       volumes:
         - name: buildah-storage
@@ -148,6 +228,71 @@ spec:
       port: 5432
       targetPort: 5432
 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-gravity
+  namespace: gravity
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-gravity
+  template:
+    metadata:
+      labels:
+        app: redis-gravity
+    spec:
+      containers:
+        - name: redis-gravity
+          image: redis:latest
+          command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              value: "${REDIS_PASSWORD}"
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          volumeMounts:
+            - name: redis-gravity-storage
+              mountPath: /data
+      volumes:
+        - name: redis-gravity-storage
+          persistentVolumeClaim:
+            claimName: redis-gravity-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-gravity-service
+  namespace: gravity
+spec:
+  selector:
+    app: redis-gravity
+  ports:
+    - protocol: TCP
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-gravity-pvc
+  namespace: gravity
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -172,32 +317,4 @@ spec:
   resources:
     requests:
       storage: 20Gi
-  storageClassName: standard  
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: gravity-ci-cd-agent-rolebinding
-subjects:
-- kind: ServiceAccount
-  name: gravity-ci-cd-agent-sa
-  namespace: default
-roleRef:
-  kind: ClusterRole
-  name: gravity-ci-cd-agent-role
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: gravity-ci-cd-agent-role
-rules:
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["create"]
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: gravity-ci-cd-agent-sa
-  namespace: gravity
+  storageClassName: standard
