@@ -16,6 +16,4 @@ GRAVITY_WEBSOCKET_URL=wss://api.gravitycloud.ai
 GIT_BRANCHES_ALLOWED=main,staging,feat-.*
 ARGOCD_URL=http://argocd-server.argocd.svc.cluster.local
 ARGOCD_TOKEN=XXXX
-REDIS_HOST=redis-gravity-service
-REDIS_PORT=6379
-REDIS_PASSWORD=
+NAMESPACE=gravity
