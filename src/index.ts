@@ -268,8 +268,8 @@ const sendSlackNotification = async (title: string, message: string) => {
 	await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` })
 }
 
-const syncArgoCD = async (appName: string, argoCDUrl: string, token: string) => {
-	const url = `${argoCDUrl}/api/v1/applications/${appName}?refresh=hard`
+const syncArgoCD = async (deploymentRunId: string, appName: string, branch: string, argoCDUrl: string, token: string) => {
+	const url = `${argoCDUrl}/api/v1/applications/${appName}-${branch}?refresh=hard`
 	try {
 		const response = await axios.get(url, {
 			headers: {
@@ -281,8 +281,10 @@ const syncArgoCD = async (appName: string, argoCDUrl: string, token: string) => 
 			})
 		})
 		console.log('Sync triggered successfully:', response.data)
+		syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Sync Completed for ${appName} in ${branch}`)
 	} catch (error) {
 		console.error('Failed to trigger sync:', error)
+		syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Sync Failed for ${appName} in ${branch}: ${error.message}`, true)
 	}
 }
 
@@ -816,7 +818,9 @@ const processJob = async () => {
 												// delete the temporary file
 												fs.unlinkSync(localFilePath)
 
-												await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
+
+												await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
 												sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
 
 											} catch (error) {
