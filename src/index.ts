@@ -816,6 +816,8 @@ const processJob = async () => {
 												// delete the temporary file
 												fs.unlinkSync(localFilePath)
 
+												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
+
 												await syncArgoCD(serviceName, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
 												sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
 
