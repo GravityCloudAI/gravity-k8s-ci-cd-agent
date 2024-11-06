@@ -43,56 +43,57 @@ const redisClient = redis.createClient({
 	url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379}`
 })
 
-redisClient.on('error', (err: any) => console.error(err));
-redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
+if (!process.env.PROCESS_JOB) {
+	redisClient.on('error', (err: any) => console.error(err));
+	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
+	redisClient.connect();
 
-redisClient.connect();
+	(async () => {
+		const client = await getDbConnection()
+		try {
+			const tableExistsQuery = `
+				SELECT EXISTS (
+					SELECT FROM information_schema.tables 
+					WHERE table_name = 'deployments'
+				)
+			`
+			const { rows } = await client.query(tableExistsQuery)
+			if (!rows[0].exists) {
+				console.log("Table 'deployments' does not exist, creating table")
+				const createTableQuery = `
+					CREATE TABLE deployments (
+						runId TEXT PRIMARY KEY,
+						actionId TEXT,
+						commit_id TEXT,
+						repository_name TEXT,
+						service_path TEXT,
+						commit_sha TEXT,
+						branch TEXT,
+						destinations TEXT,
+						regions TEXT,
+						values_files TEXT,
+						status TEXT,
+						user_id TEXT,
+						user_details TEXT,
+						created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+					)
+				`
+				await client.query(createTableQuery)
+				console.log("Table 'deployments' created successfully")
+			} else {
+				console.log("Table 'deployments' already exists")
+			}
+		} catch (err) {
+			console.error("Error checking or creating table:", err)
+		} finally {
+			client.release()
+		}
+	})()
+}
 
 async function getDbConnection() {
 	return await pool.connect()
 }
-
-(async () => {
-	const client = await getDbConnection()
-	try {
-		const tableExistsQuery = `
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_name = 'deployments'
-            )
-        `
-		const { rows } = await client.query(tableExistsQuery)
-		if (!rows[0].exists) {
-			console.log("Table 'deployments' does not exist, creating table")
-			const createTableQuery = `
-                CREATE TABLE deployments (
-                    runId TEXT PRIMARY KEY,
-                    actionId TEXT,
-					commit_id TEXT,
-                    repository_name TEXT,
-					service_path TEXT,
-					commit_sha TEXT,
-                    branch TEXT,
-                    destinations TEXT,
-                    regions TEXT,
-                    values_files TEXT,
-                    status TEXT,
-					user_id TEXT,
-					user_details TEXT,
-					created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            `
-			await client.query(createTableQuery)
-			console.log("Table 'deployments' created successfully")
-		} else {
-			console.log("Table 'deployments' already exists")
-		}
-	} catch (err) {
-		console.error("Error checking or creating table:", err)
-	} finally {
-		client.release()
-	}
-})()
 
 interface AWSRepository {
 	name: string
@@ -104,9 +105,9 @@ interface AWSRepository {
 	}
 }
 
-const syncLogsToGravityViaWebsocket = async (runId: string, action: string, message: string, isError: boolean = false) => {
+const syncLogsToGravityViaWebsocket = async (runId: string, action: string, serviceName: string, message: string, isError: boolean = false) => {
 	if (socket && socket.connected) {
-		socket.emit('log', { runId, action, message, gravityApiKey: process.env.GRAVITY_API_KEY, timestamp: new Date().toISOString(), isError })
+		socket.emit('log', { runId, serviceName, action, message, gravityApiKey: process.env.GRAVITY_API_KEY, timestamp: new Date().toISOString(), isError })
 	}
 }
 
@@ -268,8 +269,8 @@ const sendSlackNotification = async (title: string, message: string) => {
 	await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` })
 }
 
-const syncArgoCD = async (deploymentRunId: string, appName: string, branch: string, argoCDUrl: string, token: string) => {
-	const url = `${argoCDUrl}/api/v1/applications/${appName}-${branch}?refresh=hard`
+const syncArgoCD = async (deploymentRunId: string, serviceName: string, branch: string, argoCDUrl: string, token: string) => {
+	const url = `${argoCDUrl}/api/v1/applications/${serviceName}-${branch}?refresh=hard`
 	try {
 		const response = await axios.get(url, {
 			headers: {
@@ -281,10 +282,10 @@ const syncArgoCD = async (deploymentRunId: string, appName: string, branch: stri
 			})
 		})
 		console.log('Sync triggered successfully:', response.data)
-		syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Sync Completed for ${appName} in ${branch}`)
+		syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Sync Completed for ${serviceName} in ${branch}`)
 	} catch (error) {
 		console.error('Failed to trigger sync:', error)
-		syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Sync Failed for ${appName} in ${branch}: ${error.message}`, true)
+		syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Sync Failed for ${serviceName} in ${branch}: ${error.message}`, true)
 	}
 }
 
@@ -340,7 +341,7 @@ const downloadFile = async (file: any, path: string, githubToken: string) => {
 	}
 }
 
-const customExec = (runId: string, action: string, command: string, skipLogging: boolean = false): Promise<string> => {
+const customExec = (runId: string, action: string, serviceName: string, command: string, skipLogging: boolean = false): Promise<string> => {
 	return new Promise((resolve, reject) => {
 
 		const cleanedCommand = command.replace(/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|DOCKER_USERNAME)=[^\s]*/g, "$1=****").replace(/x-access-token:[^@]*@/g, "x-access-token:****@")
@@ -355,7 +356,7 @@ const customExec = (runId: string, action: string, command: string, skipLogging:
 			console.log(chunk)
 			if (!skipLogging) {
 				if (chunk) {
-					syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(chunk), false)
+					syncLogsToGravityViaWebsocket(runId, action, serviceName, JSON.stringify(chunk), false)
 				}
 			}
 		}
@@ -365,7 +366,7 @@ const customExec = (runId: string, action: string, command: string, skipLogging:
 
 		process.on('error', (error) => {
 			console.error(error)
-			syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(error.message), true)
+			syncLogsToGravityViaWebsocket(runId, action, serviceName, JSON.stringify(error.message), true)
 			reject(error)
 		})
 
@@ -374,7 +375,7 @@ const customExec = (runId: string, action: string, command: string, skipLogging:
 			if (code !== 0) {
 				const error = new Error(`Process exited with code: ${code}`)
 				console.error(error)
-				syncLogsToGravityViaWebsocket(runId, action, JSON.stringify(error.message), true)
+				syncLogsToGravityViaWebsocket(runId, action, serviceName, JSON.stringify(error.message), true)
 				reject(error)
 			} else {
 				resolve(output)
@@ -534,7 +535,7 @@ const syncGitRepo = async () => {
 						]
 					)
 
-					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath), destinations: Array.from(destinations), regions: Array.from(regionsSet) }))
+					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_CREATED", "COMMON_ACTION", JSON.stringify({ deploymentRunId, actionId: latestDeployRun.id, commitId: latestDeployRun?.head_commit?.id, repository, branch: latestDeployRun?.head_branch, userDetails: JSON.stringify(userDetails), servicePaths: services?.map((service) => service.servicePath), destinations: Array.from(destinations), regions: Array.from(regionsSet) }))
 
 					// send the details to the agent job
 					await sendDetailsToAgentJob({ deploymentRunId, services, repository, latestDeployRun })
@@ -555,6 +556,8 @@ const syncGitRepo = async () => {
 if (!process.env.PROCESS_JOB) {
 	setInterval(syncGitRepo, 30000)
 }
+
+syncGitRepo()
 
 // ##########################################################
 // Below is the agent job code that runs the CI/CD pipeline, this gets deployed with PROCESS_JOB ENV to indicate that the agent job should be run
@@ -603,14 +606,14 @@ const processJob = async () => {
 					fs.mkdirSync(gitRepoPath, { recursive: true })
 
 					const cloneUrl = `https://x-access-token:${githubToken}@github.com/${repository}.git`
-					await customExec(deploymentRunId, "GIT_CLONE", `git clone ${cloneUrl} ${gitRepoPath}`)
+					await customExec(deploymentRunId, "GIT_CLONE", serviceName, `git clone ${cloneUrl} ${gitRepoPath}`)
 
 					const lastRunBranch = latestDeployRun.head_branch
 
 					if (service.gravityConfig?.spec?.preDeploy) {
 						await Promise.all(service.gravityConfig?.spec?.preDeploy?.map(async (preDeployStep: any) => {
 							sendSlackNotification("Running Pre Deploy Command", `${preDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
-							await customExec(deploymentRunId, "PRE_DEPLOY_STEP", `cd ${gitRepoPath} && ${preDeployStep.command}`)
+							await customExec(deploymentRunId, "PRE_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${preDeployStep.command}`)
 						}))
 					}
 
@@ -621,12 +624,26 @@ const processJob = async () => {
 					const serviceContext = path.join(gitRepoPath, service.servicePath)
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
+					// let dockerBuildCommand = ""
+
+					// check if cache exists and use it if available
+					// const cacheExists = await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName,`ls /cache/${owner}-${serviceName}-latest.tar`)
+					// if (cacheExists) {
+					// 	syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", `Cache found for ${owner}/${serviceName}:latest, using it for build`)
+					// 	dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext} --cache-from ${owner}/${serviceName}:latest`
+					// } else {
+					// 	dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+					// }
+
 					const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
-					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", dockerBuildCommand)
+
+					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
+					// store docker build cache in the local storage (attached PVC)
+					// await customExec(deploymentRunId, "DOCKER_IMAGE_CACHE", serviceName, `mkdir -p /cache && ${dockerBuildCli} save -o /cache/${owner}-${serviceName}-latest.tar ${owner}/${serviceName}:latest`)
 					// Continue with existing AWS deployment logic
 					const newValuesFiles: string[] = []
 
@@ -661,23 +678,23 @@ const processJob = async () => {
 
 										// check if the ecr repository exists, if not create it
 										try {
-											await customExec(deploymentRunId, "ECR_REPOSITORY_CHECK", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`)
+											await customExec(deploymentRunId, "ECR_REPOSITORY_CHECK", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr describe-repositories --repository-names ${awsRepositoryName} --region ${region}`)
 										} catch (error) {
 											console.error(`Error checking if repository ${awsRepositoryName} exists: ${error}`)
 											console.log("Creating repository...")
-											await customExec(deploymentRunId, "ECR_REPOSITORY_CREATE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`)
+											await customExec(deploymentRunId, "ECR_REPOSITORY_CREATE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr create-repository --repository-name ${awsRepositoryName} --region ${region}`)
 										}
 
 										const imageTag = `${latestDeployRun.head_sha?.slice(0, 7)}-${lastRunBranch}`
 
 										// tag the docker image with the aws repository name and region
 										const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", dockerTagCommand)
+										await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", serviceName, dockerTagCommand)
 
 										const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", dockerPushCommand)
+										await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
 
-										await customExec(deploymentRunId, "DOCKER_LOGOUT", `${dockerBuildCli} logout ${ecrBaseURL}`)
+										await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
 
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 
@@ -733,7 +750,7 @@ const processJob = async () => {
 											} catch (error) {
 												console.error(`Error updating ${valueFileName}: ${error}`)
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: error.message }), true)
 												sendSlackNotification("Values File Update Failed", `Error updating ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}: ${error}`)
 											}
 										} else if (repoDetails?.valueFile?.source === "s3") {
@@ -756,7 +773,7 @@ const processJob = async () => {
 													s3Prefix = processedParts.join('/')
 												}
 
-												let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
 												if (!latestValueFileFromS3Bucket) {
 													console.error(`No value file found in ${valueFilesPath}`)
 													return
@@ -767,7 +784,7 @@ const processJob = async () => {
 												const tempDir = os.tmpdir()
 												const localFilePath = path.join(tempDir, path.basename(latestValueFileFromS3Bucket))
 
-												await customExec(deploymentRunId, "UPDATING_VALUES_FILE", `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} ${localFilePath}`, true)
+												await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} ${localFilePath}`, true)
 
 												const valuesFileContent = fs.readFileSync(localFilePath, 'utf8')
 
@@ -793,14 +810,14 @@ const processJob = async () => {
 													console.log(`Deleting existing S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${latestValueFileFromS3Bucket}`)
 
 													const s3DeleteCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 rm s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`
-													await customExec(deploymentRunId, "DELETING_S3_FILE", s3DeleteCommand, true)
+													await customExec(deploymentRunId, "DELETING_S3_FILE", serviceName, s3DeleteCommand, true)
 													console.log(`Successfully deleted existing S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
 
 													// Then, upload the new file
 													console.log(`Uploading new S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
 
 													const s3UploadCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp ${localFilePath} s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`
-													await customExec(deploymentRunId, "UPLOADING_S3_FILE", s3UploadCommand, true)
+													await customExec(deploymentRunId, "UPLOADING_S3_FILE", serviceName, s3UploadCommand, true)
 													console.log(`Successfully uploaded new values file to S3 bucket: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)}`)
 
 													sendSlackNotification("S3 Values File Updated", `Updated ${path.basename(latestValueFileFromS3Bucket)} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
@@ -808,7 +825,7 @@ const processJob = async () => {
 												} catch (error) {
 													console.error(`Failed to update values file in S3 bucket: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: `S3 file update failed: ${error.message}` }), true)
+													syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: `S3 file update failed: ${error.message}` }), true)
 													sendSlackNotification("Values File Update Failed", `Error updating values file in S3 bucket for ${lastRunBranch} in ${region}: ${error}`)
 													throw error
 												}
@@ -818,7 +835,7 @@ const processJob = async () => {
 												// delete the temporary file
 												fs.unlinkSync(localFilePath)
 
-												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
+												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
 
 												await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
 												sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
@@ -826,7 +843,7 @@ const processJob = async () => {
 											} catch (error) {
 												console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: error.message }), true)
 												sendSlackNotification("S3 File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`)
 											}
 										}
@@ -834,7 +851,7 @@ const processJob = async () => {
 									} catch (error) {
 										console.error(`Error processing region ${region}: ${error}`)
 										await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-										syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+										syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: error.message }), true)
 										sendSlackNotification("Deployment Failed", `Error processing region ${region} for ${repository}: ${error}`)
 									}
 								}))
@@ -842,7 +859,7 @@ const processJob = async () => {
 								console.error(`Error processing AWS repository ${repoDetails.name}: ${error}`)
 								console.error('Stack trace:', error.stack)
 								await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-								syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+								syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: error.message }), true)
 								sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`)
 							}
 						}))
@@ -854,7 +871,7 @@ const processJob = async () => {
 						[JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
 					)
 
-					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", JSON.stringify({ newValuesFiles }), false)
+					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", serviceName, JSON.stringify({ newValuesFiles }), false)
 
 					// Cleanup
 					if (fs.existsSync(gitRepoPath)) {
@@ -863,7 +880,7 @@ const processJob = async () => {
 				} catch (error) {
 					console.error(`Error processing service ${service.servicePath}: ${error}`)
 					await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
-					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: error.message }), true)
+					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", "COMMON_ACTION", JSON.stringify({ error: error.message }), true)
 					sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 				}
 			}
@@ -877,16 +894,18 @@ const processJob = async () => {
 }
 
 const cleanup = async () => {
-	console.log(`Crash. Cleaning up for deployment run id: ${deploymentRunId}`)
-	let client: pg.PoolClient | null = null
-	try {
-		client = await pool.connect()
-		await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED_RETRY", deploymentRunId])
-		syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", JSON.stringify({ error: "Pod termination" }), true)
-	} finally {
-		client?.release()
+	if (deploymentRunId) {
+		console.log(`Crash. Cleaning up for deployment run id: ${deploymentRunId}`)
+		let client: pg.PoolClient | null = null
+		try {
+			client = await pool.connect()
+			await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED_RETRY", deploymentRunId])
+			syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", "COMMON_ACTION", JSON.stringify({ error: "Pod termination" }), true)
+		} finally {
+			client?.release()
+		}
 	}
-	process.exit(0);
+	process.exit(1)
 };
 
 // Register signal handlers
@@ -922,7 +941,7 @@ if (process.env.PROCESS_JOB) {
 	subscriberClient.connect()
 
 	await subscriberClient.subscribe('agent-job', async (message) => {
-		console.log(`Received message on channel agent-job: ${message}`)
+		// console.log(`Received message on channel agent-job: ${message}`)
 
 		try {
 			const parsedJobData = JSON.parse(Buffer.from(message, 'base64').toString())
