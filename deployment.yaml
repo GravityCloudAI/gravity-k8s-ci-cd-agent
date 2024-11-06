@@ -13,7 +13,7 @@ spec:
       labels:
         app: gravity-ci-cd-agent
     spec:
-      serviceAccountName: gravity-ci-cd-agent-sa
+      restartPolicy: Always
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.28
@@ -21,7 +21,7 @@ spec:
             [
               "sh",
               "-c",
-              "until nc -z $POSTGRES_HOST 5432 && nc -z $REDIS_HOST 6379; do echo waiting for postgres and redis; if ! nc -z $POSTGRES_HOST 5432; then echo postgres not ready; fi; if ! nc -z $REDIS_HOST 6379; then echo redis not ready; fi; sleep 2; done;",
+              "until nc -z $POSTGRES_HOST ${POSTGRES_PORT:-5432} && nc -z $REDIS_HOST ${REDIS_PORT:-6379}; do echo waiting for postgres and redis; if ! nc -z $POSTGRES_HOST ${POSTGRES_PORT:-5432}; then echo postgres not ready; fi; if ! nc -z $REDIS_HOST ${REDIS_PORT:-6379}; then echo redis not ready; fi; sleep 2; done;",
             ]
           env:
             - name: POSTGRES_HOST
@@ -94,7 +94,7 @@ spec:
       labels:
         app: gravity-job-agent
     spec:
-      restartPolicy: Always
+      restartPolicy: OnFailure
       containers:
         - name: gravity-job-agent
           image: gravitycloud/gravity-ci-cd-agent:latest
@@ -186,6 +186,7 @@ spec:
       labels:
         app: postgres-gravity
     spec:
+      restartPolicy: Always
       containers:
         - name: postgres-gravity
           image: postgres:latest
@@ -243,6 +244,7 @@ spec:
       labels:
         app: redis-gravity
     spec:
+      restartPolicy: Always
       containers:
         - name: redis-gravity
           image: redis:latest

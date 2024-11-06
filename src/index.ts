@@ -443,7 +443,7 @@ const syncGitRepo = async () => {
 
 					// Check if already processed. Any state is fine, COMPLETED, FAILED, IN_PROGRESS. We do not auto-run the failed runs.
 					const checkIfProcessed = await client?.query(
-						"SELECT * FROM deployments WHERE actionId = $1",
+						"SELECT * FROM deployments WHERE actionId = $1 ORDER BY created_at DESC LIMIT 1",
 						[latestDeployRun.id]
 					)
 
@@ -452,6 +452,11 @@ const syncGitRepo = async () => {
 					if (checkIfProcessed?.rows?.length > 0) {
 						if (checkIfProcessed?.rows[0]?.status === "FAILED_RETRY") {
 							console.log("Run processed with Failed Retry. Attempting to re-run the agent job.")
+							// update the status to Failed
+							await client?.query(
+								"UPDATE deployments SET status = 'FAILED' WHERE actionId = $1",
+								[latestDeployRun.id]
+							)
 						} else {
 							if (latestDeployRun?.run_attempt > 1 && checkIfProcessed?.rows[0]?.status !== "FAILED") {
 								console.log("Run already processed, skipping.")
