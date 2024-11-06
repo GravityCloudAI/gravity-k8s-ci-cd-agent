@@ -1,17 +1,34 @@
 metadata:
-  name: nodejs-app
+  name: mono-repo-js
 spec:
   branch:
     - name: main
       approval: manual
     - name: development
       approval: automatic
+    - name: feat-.*
+      approval: automatic
+  preDeploy:
+    - name: run dummy script
+      command: bash ./dummy.sh
   aws:
     repository:
-      - name: nodejs-app-east
+      - name: mono-repo-js-east
         regions:
           - us-east-1
         branch: main
         valueFile:
+          source: git
+      - name: mono-repo-js-east
+        regions:
+          - us-east-1
+        branch: development
+        valueFile:
+          source: git
+      - name: mono-repo-js-east
+        regions:
+          - us-east-1
+        branch: feat-.*
+        valueFile:
           source: s3
-          bucket: gravity-app-prod-values
+          bucket: gravity-app-prod-values/feat-.*
