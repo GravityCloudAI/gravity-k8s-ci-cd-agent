@@ -29,9 +29,9 @@ spec:
             - name: REDIS_HOST
               value: "${REDIS_HOST}"
             - name: POSTGRES_PORT
-              value: "${POSTGRES_PORT:-5432}"
+              value: "${POSTGRES_PORT}"
             - name: REDIS_PORT
-              value: "${REDIS_PORT:-6379}"
+              value: "${REDIS_PORT}"
       containers:
         - name: gravity-ci-cd-agent
           image: gravitycloud/gravity-ci-cd-agent:latest
@@ -41,8 +41,6 @@ spec:
               value: "${GRAVITY_API_KEY}"
             - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_WEBSOCKET_URL}"
-            - name: NAMESPACE
-              value: "${NAMESPACE:-gravity}"
             - name: ENV
               value: "${ENV}"
             - name: GITHUB_TOKEN
@@ -68,11 +66,11 @@ spec:
             - name: POSTGRES_DB
               value: "${POSTGRES_DB}"
             - name: POSTGRES_PORT
-              value: "${POSTGRES_PORT:-5432}"
+              value: "${POSTGRES_PORT}"
             - name: REDIS_HOST
               value: "${REDIS_HOST}"
             - name: REDIS_PORT
-              value: "${REDIS_PORT:-6379}"
+              value: "${REDIS_PORT}"
             - name: REDIS_PASSWORD
               value: "${REDIS_PASSWORD}"
             - name: SLACK_WEBHOOK_URL
@@ -144,11 +142,11 @@ spec:
             - name: POSTGRES_DB
               value: "${POSTGRES_DB}"
             - name: POSTGRES_PORT
-              value: "${POSTGRES_PORT:-5432}"
+              value: "${POSTGRES_PORT}"
             - name: REDIS_HOST
               value: "${REDIS_HOST}"
             - name: REDIS_PORT
-              value: "${REDIS_PORT:-6379}"
+              value: "${REDIS_PORT}"
             - name: REDIS_PASSWORD
               value: "${REDIS_PASSWORD}"
             - name: SLACK_WEBHOOK_URL
