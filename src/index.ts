@@ -40,7 +40,7 @@ const pool = new Pool({
 })
 
 const redisClient = redis.createClient({
-	url: `redis://admin:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379}`
+	url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379}`
 })
 
 redisClient.on('error', (err: any) => console.error(err));
@@ -910,7 +910,7 @@ console.log("process.env.PROCESS_JOB: ", process.env.PROCESS_JOB)
 if (process.env.PROCESS_JOB) {
 
 	const subscriberClient = redis.createClient({
-		url: `redis://admin:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
+		url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
 	})
 
 	subscriberClient.on('error', (err: any) => console.error('Subscriber error:', err));
