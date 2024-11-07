@@ -557,6 +557,14 @@ if (!process.env.PROCESS_JOB) {
 	setInterval(syncGitRepo, 30000)
 }
 
+if (process.env.ENV === "development") {
+	redisClient.on('error', (err: any) => console.error(err));
+	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
+	redisClient.connect();
+	syncGitRepo()
+
+}
+
 // ##########################################################
 // Below is the agent job code that runs the CI/CD pipeline, this gets deployed with PROCESS_JOB ENV to indicate that the agent job should be run
 
@@ -624,16 +632,22 @@ const processJob = async () => {
 
 					let dockerBuildCommand = ""
 
-					const cacheExists = await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `ls /image-cache/${owner}-${serviceName}-latest.tar`)
+					let cacheExists = false
+					const imageCacheBasePath = process.env.ENV === "production" ? "/image-cache" : "./image-cache"
+					try {
+						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `ls ${imageCacheBasePath}/${owner}-${serviceName}-latest.tar`)
+						cacheExists = true
+					} catch (error) {
+						syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `No cache found for ${owner}/${serviceName}:latest, proceeding with fresh build`)
+					}
+
 					if (cacheExists) {
 						syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `Cache found for ${owner}/${serviceName}:latest, using it for build`)
-						await customExec(deploymentRunId, "DOCKER_CACHE_LOAD", serviceName, `${dockerBuildCli} load -i /image-cache/${owner}-${serviceName}-latest.tar`)
+						await customExec(deploymentRunId, "DOCKER_CACHE_LOAD", serviceName, `${dockerBuildCli} load -i ${imageCacheBasePath}/${owner}-${serviceName}-latest.tar`)
 
 						dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext} --cache-from ${owner}/${serviceName}:latest`
 					} else {
 						dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
-
-						await customExec(deploymentRunId, "DOCKER_IMAGE_CACHE", serviceName, `${dockerBuildCli} save -o /image-cache/${owner}-${serviceName}-latest.tar ${owner}/${serviceName}:latest`)
 					}
 
 					// const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
@@ -642,6 +656,7 @@ const processJob = async () => {
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
+					await customExec(deploymentRunId, "DOCKER_IMAGE_CACHE", serviceName, `${dockerBuildCli} save -o ${imageCacheBasePath}/${owner}-${serviceName}-latest.tar ${owner}/${serviceName}:latest`)
 
 					// Continue with existing AWS deployment logic
 					const newValuesFiles: string[] = []
