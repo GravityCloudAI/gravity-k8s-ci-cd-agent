@@ -13,16 +13,20 @@ RUN apt-get update \
     iptables
 
 # Add the official repositories for Buildah
-RUN . /etc/os-release \
-    && echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_$VERSION_ID/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
-    && curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/Debian_$VERSION_ID/Release.key | apt-key add -
+# RUN . /etc/os-release \
+#     && echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_$VERSION_ID/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
+#     && curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/Debian_$VERSION_ID/Release.key | apt-key add -
+
+# RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/bookworm.list
+
+RUN echo "deb http://deb.debian.org/debian bullseye-backports main" | tee /etc/apt/sources.list.d/bullseye-backports.list
 
 # Install Buildah
 RUN apt-get update \
-    && apt-get -y install buildah
+    && apt-get -t bullseye-backports install -y buildah
 
 # Verify Buildah installation
-RUN buildah --version
+RUN echo "Buildah version: $(buildah --version)"
 
 # Install AWS CLI
 RUN pip3 install awscli --upgrade
