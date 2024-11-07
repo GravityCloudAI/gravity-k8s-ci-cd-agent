@@ -557,8 +557,6 @@ if (!process.env.PROCESS_JOB) {
 	setInterval(syncGitRepo, 30000)
 }
 
-syncGitRepo()
-
 // ##########################################################
 // Below is the agent job code that runs the CI/CD pipeline, this gets deployed with PROCESS_JOB ENV to indicate that the agent job should be run
 
