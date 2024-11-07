@@ -582,7 +582,7 @@ const processJob = async () => {
 
 			const [owner, repo] = repository.split('/')
 
-			for (const service of services) {
+			await Promise.all(services.map(async (service: any) => {
 				try {
 					if (!service.hasChanges) {
 						console.log(`No changes found for service ${service.servicePath}, skipping`)
@@ -624,26 +624,27 @@ const processJob = async () => {
 					const serviceContext = path.join(gitRepoPath, service.servicePath)
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
-					// let dockerBuildCommand = ""
+					let dockerBuildCommand = ""
 
-					// check if cache exists and use it if available
-					// const cacheExists = await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName,`ls /cache/${owner}-${serviceName}-latest.tar`)
-					// if (cacheExists) {
-					// 	syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", `Cache found for ${owner}/${serviceName}:latest, using it for build`)
-					// 	dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext} --cache-from ${owner}/${serviceName}:latest`
-					// } else {
-					// 	dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
-					// }
+					const cacheExists = await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `ls /image-cache/${owner}-${serviceName}-latest.tar`)
+					if (cacheExists) {
+						syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `Cache found for ${owner}/${serviceName}:latest, using it for build`)
+						await customExec(deploymentRunId, "DOCKER_CACHE_LOAD", serviceName, `${dockerBuildCli} load -i /image-cache/${owner}-${serviceName}-latest.tar`)
 
-					const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+						dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext} --cache-from ${owner}/${serviceName}:latest`
+					} else {
+						dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
+						await customExec(deploymentRunId, "DOCKER_IMAGE_CACHE", serviceName, `${dockerBuildCli} save -o /image-cache/${owner}-${serviceName}-latest.tar ${owner}/${serviceName}:latest`)
+					}
+
+					// const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
-					// store docker build cache in the local storage (attached PVC)
-					// await customExec(deploymentRunId, "DOCKER_IMAGE_CACHE", serviceName, `mkdir -p /cache && ${dockerBuildCli} save -o /cache/${owner}-${serviceName}-latest.tar ${owner}/${serviceName}:latest`)
+
 					// Continue with existing AWS deployment logic
 					const newValuesFiles: string[] = []
 
@@ -883,9 +884,7 @@ const processJob = async () => {
 					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", "COMMON_ACTION", JSON.stringify({ error: error.message }), true)
 					sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 				}
-			}
-
-
+			}))
 		} catch (error) {
 			console.error(`Error parsing job data: ${error}`)
 			throw error

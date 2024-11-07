@@ -39,6 +39,7 @@ RUN npm clean-install
 
 # Copy source files
 COPY --chown=node:node . /usr/src/app/
+RUN mkdir /usr/src/app/image-cache
 
 # Build the Node.js application
 RUN npm run build
