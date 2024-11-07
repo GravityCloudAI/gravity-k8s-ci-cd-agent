@@ -1,4 +1,4 @@
-FROM node:20-bullseye
+FROM node:20-bookworm
 
 # Install dependencies for Buildah and Docker
 RUN apt-get update \
@@ -17,19 +17,19 @@ RUN apt-get update \
 #     && echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_$VERSION_ID/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
 #     && curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/Debian_$VERSION_ID/Release.key | apt-key add -
 
-# RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/bookworm.list
+RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/sid.list
 
-RUN echo "deb http://deb.debian.org/debian bullseye-backports main" | tee /etc/apt/sources.list.d/bullseye-backports.list
+# RUN echo "deb http://deb.debian.org/debian bullseye-backports main" | tee /etc/apt/sources.list.d/bullseye-backports.list
 
 # Install Buildah
 RUN apt-get update \
-    && apt-get -t bullseye-backports install -y buildah
+    && apt-get -t sid install -y buildah
 
 # Verify Buildah installation
 RUN echo "Buildah version: $(buildah --version)"
 
 # Install AWS CLI
-RUN pip3 install awscli --upgrade
+RUN pip3 install awscli --upgrade --break-system-packages
 
 # Set AWS CLI pager to empty
 RUN aws configure set cli_pager ""
