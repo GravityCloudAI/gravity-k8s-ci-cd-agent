@@ -40,4 +40,4 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ github.ref == 'refs/heads/main' && 'gravitycloud/gravity-ci-cd-agent:latest' || 'gravitycloud/gravity-ci-cd-agent:dev' }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64

@@ -1,4 +1,4 @@
-FROM node:20-bullseye
+FROM node:20-bookworm
 
 # Install dependencies for Buildah and Docker
 RUN apt-get update \
@@ -12,23 +12,27 @@ RUN apt-get update \
     python3-pip python3-dev unzip \
     iptables
 
-# Add the official repositories for Buildah
-RUN . /etc/os-release \
-    && echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_$VERSION_ID/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
-    && curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/Debian_$VERSION_ID/Release.key | apt-key add -
+RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/sid.list
 
 # Install Buildah
 RUN apt-get update \
-    && apt-get -y install buildah
+    && apt-get -t sid install -y buildah
 
 # Verify Buildah installation
-RUN buildah --version
+RUN echo "Buildah version: $(buildah --version)"
 
 # Install AWS CLI
-RUN pip3 install awscli --upgrade
+RUN pip3 install awscli --upgrade --break-system-packages
 
 # Set AWS CLI pager to empty
 RUN aws configure set cli_pager ""
+
+# Install Helm
+RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+    && chmod 700 get_helm.sh \
+    && ./get_helm.sh
+
+RUN helm version --short
 
 # Create the working directory
 WORKDIR /usr/src/app
