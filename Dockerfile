@@ -12,14 +12,7 @@ RUN apt-get update \
     python3-pip python3-dev unzip \
     iptables
 
-# Add the official repositories for Buildah
-# RUN . /etc/os-release \
-#     && echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/Debian_$VERSION_ID/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list \
-#     && curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable/Debian_$VERSION_ID/Release.key | apt-key add -
-
 RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/sid.list
-
-# RUN echo "deb http://deb.debian.org/debian bullseye-backports main" | tee /etc/apt/sources.list.d/bullseye-backports.list
 
 # Install Buildah
 RUN apt-get update \
@@ -33,6 +26,13 @@ RUN pip3 install awscli --upgrade --break-system-packages
 
 # Set AWS CLI pager to empty
 RUN aws configure set cli_pager ""
+
+# Install Helm
+RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+    && chmod 700 get_helm.sh \
+    && ./get_helm.sh
+
+RUN helm version --short
 
 # Create the working directory
 WORKDIR /usr/src/app

@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gravity-ci-cd-agent
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   replicas: 1
   selector:
@@ -87,7 +87,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: gravity-job-agent
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   template:
     metadata:
@@ -95,6 +95,7 @@ spec:
         app: gravity-job-agent
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: gravity-job-agent-sa
       containers:
         - name: gravity-job-agent
           image: gravitycloud/gravity-ci-cd-agent:latest
@@ -175,7 +176,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres-gravity
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   replicas: 1
   selector:
@@ -220,7 +221,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres-gravity-service
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   selector:
     app: postgres-gravity
@@ -233,7 +234,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis-gravity
-  namespace: gravity
+  namespace: 
 spec:
   replicas: 1
   selector:
@@ -273,7 +274,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: redis-gravity-service
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   selector:
     app: redis-gravity
@@ -286,7 +287,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: redis-gravity-pvc
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -299,7 +300,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-gravity-pvc
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -312,7 +313,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: agent-gravity-pvc
-  namespace: gravity
+  namespace: ${NAMESPACE}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -320,3 +321,46 @@ spec:
     requests:
       storage: 20Gi
   storageClassName: standard
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gravity-job-agent-sa
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gravity-job-agent-rolebinding
+subjects:
+- kind: ServiceAccount
+  name: gravity-job-agent-sa
+  namespace: ${NAMESPACE}
+roleRef:
+  kind: ClusterRole
+  name: gravity-job-agent-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gravity-job-agent-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "pods/exec", "services", "secrets", "configmaps", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["policy"]
+  resources: ["podsecuritypolicies"]
+  verbs: ["use"]
