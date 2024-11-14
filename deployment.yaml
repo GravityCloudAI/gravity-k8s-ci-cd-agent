@@ -21,7 +21,7 @@ spec:
             [
               "sh",
               "-c",
-              "until nc -z $POSTGRES_HOST ${POSTGRES_PORT:-5432} && nc -z $REDIS_HOST ${REDIS_PORT:-6379}; do echo waiting for postgres and redis; if ! nc -z $POSTGRES_HOST ${POSTGRES_PORT:-5432}; then echo postgres not ready; fi; if ! nc -z $REDIS_HOST ${REDIS_PORT:-6379}; then echo redis not ready; fi; sleep 2; done;",
+              "until nc -z $POSTGRES_HOST ${POSTGRES_PORT} && nc -z $REDIS_HOST ${REDIS_PORT}; do echo waiting for postgres and redis; if ! nc -z $POSTGRES_HOST ${POSTGRES_PORT:-5432}; then echo postgres not ready; fi; if ! nc -z $REDIS_HOST ${REDIS_PORT:-6379}; then echo redis not ready; fi; sleep 2; done;",
             ]
           env:
             - name: POSTGRES_HOST
@@ -234,7 +234,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis-gravity
-  namespace: 
+  namespace: ${NAMESPACE}
 spec:
   replicas: 1
   selector:
@@ -347,7 +347,13 @@ metadata:
   name: gravity-job-agent-role
 rules:
 - apiGroups: [""]
-  resources: ["pods", "pods/log", "pods/exec", "services", "secrets", "configmaps", "persistentvolumeclaims"]
+  resources: ["pods", "pods/log", "pods/exec", "services", "secrets", "configmaps", "persistentvolumeclaims", "serviceaccounts"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["namespaces"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["apps"]
   resources: ["deployments", "statefulsets", "replicasets"]
@@ -356,11 +362,11 @@ rules:
   resources: ["jobs"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
+  resources: ["ingresses", "networkpolicies"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["roles", "rolebindings"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["policy"]
-  resources: ["podsecuritypolicies"]
-  verbs: ["use"]
+  resources: ["podsecuritypolicies", "poddisruptionbudgets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

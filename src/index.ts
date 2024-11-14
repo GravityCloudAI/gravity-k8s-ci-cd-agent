@@ -19,6 +19,11 @@ interface ServiceChange {
 	lastCommitSha?: string
 }
 
+interface PipelineCharts {
+	charts: any[],
+	branch: string
+}
+
 interface DeployRun {
 	id: string;
 	name: string;
@@ -630,41 +635,11 @@ const processJob = async () => {
 					const serviceContext = path.join(gitRepoPath, service.servicePath)
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
-					// let dockerBuildCommand = ""
-
-					// let cacheExists = false
-					// const imageCacheBasePath = process.env.ENV === "production" ? "/image-cache" : "./image-cache"
-					// try {
-					// 	await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `ls ${imageCacheBasePath}/${owner}-${serviceName}-latest.tar`)
-					// 	cacheExists = true
-					// } catch (error) {
-					// 	syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `No cache found for ${owner}/${serviceName}:latest, proceeding with fresh build`)
-					// }
-
-					// if (cacheExists) {
-					// 	syncLogsToGravityViaWebsocket(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `Cache found for ${owner}/${serviceName}:latest, using it for build`)
-					// 	if (process.env.ENV === "developement") {
-					// 		await customExec(deploymentRunId, "DOCKER_CACHE_LOAD", serviceName, `${dockerBuildCli} load -i ${imageCacheBasePath}/${owner}-${serviceName}-latest.tar`)
-					// 	} else {
-					// 		dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext} ${process.env.ENV === "production" ? `--cache-from=type=tar,dest=${imageCacheBasePath}/${owner}-${serviceName}-latest.tar` : `--cache-from ${owner}/${serviceName}:latest`}`
-					// 	}
-					// } else {
-					// 	if (process.env.ENV === "developement") {
-					// 		dockerBuildCommand = `${dockerBuildCli} build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
-					// 	} else {
-					// 		dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext} --cache-to=type=tar,dest=${imageCacheBasePath}/${owner}-${serviceName}-latest.tar`
-					// 	}
-					// }
-
 					const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
-
-					// if (process.env.ENV === "developement") {
-					// 	await customExec(deploymentRunId, "DOCKER_IMAGE_CACHE", serviceName, `${dockerBuildCli} save -o ${imageCacheBasePath}/${owner}-${serviceName}-latest.tar ${owner}/${serviceName}:latest`)
-					// }
 
 					// Continue with existing AWS deployment logic
 					const newValuesFiles: string[] = []
@@ -892,6 +867,46 @@ const processJob = async () => {
 						"UPDATE deployments SET values_files = $1, status = $2 WHERE runId = $3",
 						[JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
 					)
+
+					const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
+						// Check for exact match first
+						if (allowedBranch === lastRunBranch) {
+							return allowedBranch;
+						}
+						// Check for wildcard pattern match
+						if (allowedBranch.endsWith('.*')) {
+							const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+							const pattern = new RegExp(`^${prefix}.*$`);
+							if (pattern.test(lastRunBranch)) {
+								return allowedBranch;
+							}
+						}
+					});
+
+
+					if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
+						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Fetching chart dependecies for branch: ${matchedAllowedRegex}`, false)
+						const pipelineCharts: PipelineCharts = await axios.post(`${process.env.GRAVITY_API_URL}/api/v1/pipeline-charts`, {
+							awsAccountId: process.env.AWS_ACCOUNT_ID,
+							env: process.env.ENV,
+							branch: lastRunBranch
+						})
+
+						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
+						if (pipelineCharts?.charts?.length > 0) {
+							// save the new values file locally and pass in helm command
+							const tempDir = os.tmpdir()
+							const valuesFilePath = path.join(tempDir, `${serviceName}-values-${lastRunBranch}.yaml`)
+							fs.writeFileSync(valuesFilePath, JSON.stringify(newValuesFiles))
+
+							syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
+							await Promise.all(pipelineCharts?.charts?.map(async (chart: any) => {
+								syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying chart: ${JSON.stringify(chart)}`, false)
+								const helmChartInstallCommand = `helm upgrade --install ${chart.name} ${chart.repository} --namespace ${lastRunBranch} --version ${chart.version} -f ${valuesFilePath}`
+								await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, true)
+							}))
+						}
+					}
 
 					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", serviceName, JSON.stringify({ newValuesFiles }), false)
 
