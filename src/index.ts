@@ -19,8 +19,16 @@ interface ServiceChange {
 	lastCommitSha?: string
 }
 
+interface ChartDetails {
+	chartName: string,
+	chartVersion: string,
+	chartRepository: string,
+	repositoryName: string
+}
+
 interface PipelineCharts {
-	charts: any[],
+	awsAccountId: string,
+	charts: Array<ChartDetails>,
 	branch: string
 }
 
@@ -695,6 +703,7 @@ const processJob = async () => {
 
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 
+										let newLocalValuesFilePath: string | null = null
 										if (repoDetails?.valueFile?.source === "git") {
 											const valueFileName = `${serviceName}-values-${lastRunBranch}-${region}.yaml`
 
@@ -739,6 +748,9 @@ const processJob = async () => {
 													sha: currentFile.sha,
 													branch: lastRunBranch
 												})
+
+												newLocalValuesFilePath = path.join(tempDir, valueFileName)
+												fs.writeFileSync(newLocalValuesFilePath, yaml.stringify(parsedValuesFile))
 
 												console.log(`Updated ${valueFileName} for ${lastRunBranch} in ${region}`)
 												sendSlackNotification("Values File Updated", `Updated ${valueFileName} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
@@ -799,6 +811,8 @@ const processJob = async () => {
 												// create a temporary file with the new values file content with same name as the original one
 												fs.writeFileSync(localFilePath, yaml.stringify(parsedValuesFile))
 
+												newLocalValuesFilePath = localFilePath
+
 												// upload the temporary file to the s3 bucket
 												try {
 													console.log(`Updating S3 file: ${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${latestValueFileFromS3Bucket}`)
@@ -829,12 +843,13 @@ const processJob = async () => {
 
 												newValuesFiles.push(JSON.stringify({ name: path.basename(latestValueFileFromS3Bucket), previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
 
-												// delete the temporary file
-												fs.unlinkSync(localFilePath)
-
 												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
 
-												await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+												if (!process.env.ARGOCD_URL) {
+													console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${lastRunBranch}`)
+												} else {
+													await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL, process.env.ARGOCD_TOKEN!!)
+												}
 												sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
 
 											} catch (error) {
@@ -843,6 +858,61 @@ const processJob = async () => {
 												syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: error.message }), true)
 												sendSlackNotification("S3 File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`)
 											}
+										}
+
+										const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
+											// Check for exact match first
+											if (allowedBranch === lastRunBranch) {
+												return allowedBranch;
+											}
+											// Check for wildcard pattern match
+											if (allowedBranch.endsWith('.*')) {
+												const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+												const pattern = new RegExp(`^${prefix}.*$`);
+												if (pattern.test(lastRunBranch)) {
+													return allowedBranch;
+												}
+											}
+
+											return false
+										});
+
+										if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
+											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Fetching chart dependecies for branch: ${matchedAllowedRegex}`, false)
+											const pipelineChartsRez = await axios.post<PipelineCharts>(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/pipeline-charts`, {
+												awsAccountId: process.env.AWS_ACCOUNT_ID,
+												gravityApiKey: process.env.GRAVITY_API_KEY,
+												branch: matchedAllowedRegex
+											})
+
+											const pipelineCharts = pipelineChartsRez?.data
+
+											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
+											if (pipelineCharts?.charts?.length > 0) {
+												// save the new values file locally and pass in helm command
+												const tempDir = os.tmpdir()
+												const valuesFilePath = path.join(tempDir, `${serviceName}-values-${lastRunBranch}.yaml`)
+												fs.writeFileSync(valuesFilePath, JSON.stringify(newValuesFiles))
+
+												syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
+												await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
+													syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying chart: ${JSON.stringify(chart)}`, false)
+
+													//  need to add repository to via helm repo add
+													const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
+													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmRepoAddCommand, false)
+
+													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, "helm repo update", false)
+
+													const helmChartInstallCommand = `helm upgrade --install ${chart.chartName}-${lastRunBranch} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${newLocalValuesFilePath}`
+													console.log(`Helm command: ${helmChartInstallCommand}`)
+													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, false)
+												}))
+											}
+										}
+
+										if (newLocalValuesFilePath) {
+											fs.unlinkSync(newLocalValuesFilePath)
 										}
 
 									} catch (error) {
@@ -867,46 +937,6 @@ const processJob = async () => {
 						"UPDATE deployments SET values_files = $1, status = $2 WHERE runId = $3",
 						[JSON.stringify(newValuesFiles), "COMPLETED", deploymentRunId]
 					)
-
-					const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
-						// Check for exact match first
-						if (allowedBranch === lastRunBranch) {
-							return allowedBranch;
-						}
-						// Check for wildcard pattern match
-						if (allowedBranch.endsWith('.*')) {
-							const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-							const pattern = new RegExp(`^${prefix}.*$`);
-							if (pattern.test(lastRunBranch)) {
-								return allowedBranch;
-							}
-						}
-					});
-
-
-					if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
-						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Fetching chart dependecies for branch: ${matchedAllowedRegex}`, false)
-						const pipelineCharts: PipelineCharts = await axios.post(`${process.env.GRAVITY_API_URL}/api/v1/pipeline-charts`, {
-							awsAccountId: process.env.AWS_ACCOUNT_ID,
-							env: process.env.ENV,
-							branch: lastRunBranch
-						})
-
-						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
-						if (pipelineCharts?.charts?.length > 0) {
-							// save the new values file locally and pass in helm command
-							const tempDir = os.tmpdir()
-							const valuesFilePath = path.join(tempDir, `${serviceName}-values-${lastRunBranch}.yaml`)
-							fs.writeFileSync(valuesFilePath, JSON.stringify(newValuesFiles))
-
-							syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
-							await Promise.all(pipelineCharts?.charts?.map(async (chart: any) => {
-								syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying chart: ${JSON.stringify(chart)}`, false)
-								const helmChartInstallCommand = `helm upgrade --install ${chart.name} ${chart.repository} --namespace ${lastRunBranch} --version ${chart.version} -f ${valuesFilePath}`
-								await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, true)
-							}))
-						}
-					}
 
 					syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_COMPLETED", serviceName, JSON.stringify({ newValuesFiles }), false)
 
