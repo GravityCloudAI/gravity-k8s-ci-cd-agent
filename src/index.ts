@@ -283,6 +283,10 @@ const sendSlackNotification = async (title: string, message: string) => {
 }
 
 const syncArgoCD = async (deploymentRunId: string, serviceName: string, branch: string, argoCDUrl: string, token: string) => {
+	if (!argoCDUrl) {
+		console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${branch}`)
+		return
+	}
 	const url = `${argoCDUrl}/api/v1/applications/${serviceName}-${branch}?refresh=hard`
 	try {
 		const response = await axios.get(url, {
