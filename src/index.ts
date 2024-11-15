@@ -283,10 +283,6 @@ const sendSlackNotification = async (title: string, message: string) => {
 }
 
 const syncArgoCD = async (deploymentRunId: string, serviceName: string, branch: string, argoCDUrl: string, token: string) => {
-	if (!argoCDUrl) {
-		console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${branch}`)
-		return
-	}
 	const url = `${argoCDUrl}/api/v1/applications/${serviceName}-${branch}?refresh=hard`
 	try {
 		const response = await axios.get(url, {
@@ -849,7 +845,11 @@ const processJob = async () => {
 
 												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
 
-												await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL!!, process.env.ARGOCD_TOKEN!!)
+												if (!process.env.ARGOCD_URL) {
+													console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${lastRunBranch}`)
+												} else {
+													await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL, process.env.ARGOCD_TOKEN!!)
+												}
 												sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
 
 											} catch (error) {
