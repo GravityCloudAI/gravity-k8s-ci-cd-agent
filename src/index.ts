@@ -23,7 +23,8 @@ interface ChartDetails {
 	chartName: string,
 	chartVersion: string,
 	chartRepository: string,
-	repositoryName: string
+	repositoryName: string,
+	valuesFile: string
 }
 
 interface PipelineCharts {
@@ -889,13 +890,13 @@ const processJob = async () => {
 
 											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
 											if (pipelineCharts?.charts?.length > 0) {
-												// save the new values file locally and pass in helm command
-												const tempDir = os.tmpdir()
-												const valuesFilePath = path.join(tempDir, `${serviceName}-values-${lastRunBranch}.yaml`)
-												fs.writeFileSync(valuesFilePath, JSON.stringify(newValuesFiles))
-
 												syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
 												await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
+
+													const tempDir = os.tmpdir()
+													const valuesFilePath = path.join(tempDir, `${chart.chartName}-values-${lastRunBranch}.yaml`)
+													fs.writeFileSync(valuesFilePath, chart.valuesFile)
+
 													syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying chart: ${JSON.stringify(chart)}`, false)
 
 													//  need to add repository to via helm repo add
