@@ -57,11 +57,7 @@ const redisClient = redis.createClient({
 	url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT) : 6379}`
 })
 
-if (!process.env.PROCESS_JOB) {
-	redisClient.on('error', (err: any) => console.error(err));
-	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
-	redisClient.connect();
-
+const checkAndCreateDatabaseTables = async () => {
 	(async () => {
 		const client = await getDbConnection()
 		try {
@@ -102,7 +98,50 @@ if (!process.env.PROCESS_JOB) {
 		} finally {
 			client.release()
 		}
-	})()
+	})();
+
+	(async () => {
+		const client = await getDbConnection()
+		try {
+			const tableExistsQuery = `
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_name = 'helm_deployments'
+			)
+		`
+			const { rows } = await client.query(tableExistsQuery)
+			console.log("helm_deployments: ", rows)
+			if (!rows[0].exists) {
+				console.log("Table 'helm_deployments' does not exist, creating table")
+				const createTableQuery = `
+				CREATE TABLE helm_deployments (
+					runId TEXT PRIMARY KEY,
+					branch TEXT,
+					namespace TEXT,
+					status TEXT,
+					charts TEXT,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				)
+			`
+				await client.query(createTableQuery)
+			} else {
+				console.log("Table 'helm_deployments' already exists")
+			}
+		} catch (err) {
+			console.error("Error checking or creating table:", err)
+		} finally {
+			client.release()
+		}
+	})();
+}
+
+if (!process.env.PROCESS_JOB) {
+	console.log("Skipping Redis connection because PROCESS_JOB is not set")
+	redisClient.on('error', (err: any) => console.error(err));
+	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
+	redisClient.connect();
+
+	checkAndCreateDatabaseTables()
 }
 
 async function getDbConnection() {
@@ -402,6 +441,27 @@ const sendDetailsToAgentJob = async (details: any) => {
 	redisClient.publish("agent-job", Buffer.from(JSON.stringify(details)).toString('base64'))
 }
 
+const processHelmDeployments = async (branches: any) => {
+	// check for branches that had helm deployments, if they are deleted, delete the helm deployments from the table
+
+	const client = await getDbConnection()
+	const branchesWithHelmDeployments = await client?.query(`
+		SELECT * FROM helm_deployments 
+		WHERE branch IN (SELECT DISTINCT branch FROM helm_deployments)
+	`)
+	// check if the branches are deleted, if so delete the helm deployments from the table
+	for (const elem of branchesWithHelmDeployments?.rows) {
+		if (!branches.find((b: any) => b.name === elem.branch)) {
+			await Promise.all(elem.charts.split(",").map(async (chart: string) => {
+				console.log(`Uninstalling Helm Chart ${chart}-${elem.branch} from namespace ${elem.branch}`)
+				await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart}-${elem.branch} -n ${elem.branch}`, true)
+			}))
+
+			await client?.query("DELETE FROM helm_deployments WHERE branch = $1", [elem.branch])
+		}
+	}
+}
+
 const syncGitRepo = async () => {
 	let client: pg.PoolClient | null = null
 	try {
@@ -414,6 +474,14 @@ const syncGitRepo = async () => {
 			console.log(`Syncing repository: ${repository}`)
 			try {
 				const [owner, repo] = repository.split('/')
+
+				// get all branches for the repository
+				const { data: branches } = await octokit.rest.repos.listBranches({
+					owner,
+					repo
+				})
+
+				processHelmDeployments(branches)
 
 				// Get latest deploy run
 				const githubActionsStatus = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
@@ -575,8 +643,8 @@ if (process.env.ENV === "development") {
 	redisClient.on('error', (err: any) => console.error(err));
 	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
 	redisClient.connect();
+	checkAndCreateDatabaseTables()
 	syncGitRepo()
-
 }
 
 // ##########################################################
@@ -888,9 +956,8 @@ const processJob = async () => {
 
 											const pipelineCharts = pipelineChartsRez?.data
 
-											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
+											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName)) ?? "None"}`, false)
 											if (pipelineCharts?.charts?.length > 0) {
-												syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying charts: ${JSON.stringify(pipelineCharts?.charts)}`, false)
 												await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
 
 													const tempDir = os.tmpdir()
@@ -909,6 +976,8 @@ const processJob = async () => {
 													console.log(`Helm command: ${helmChartInstallCommand}`)
 													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, false)
 												}))
+
+												await client?.query("INSERT INTO helm_deployments (runId, branch, namespace, status, charts, updated_at) VALUES ($1, $2, $3, $4, $5, $6)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName).join(","), new Date()])
 											}
 										}
 
