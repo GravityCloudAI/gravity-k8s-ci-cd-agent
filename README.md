@@ -490,7 +490,7 @@ rules:
 3. Deploy the application to Kubernetes using `kubectl apply -f deployment_subst.yaml`.
 
 ### Custom Helm Charts (feature/dev environments)
-1. Logon to Gravity UI and go to <kbd>Kubernetes</kbd> -> <kbd>Pipelines</kbd> -> <kbd>Pipeline Charts</kbd> OR visit (https://console.gravitycloud.ai/kubernetes?tab=PIPELINES)[https://console.gravitycloud.ai/kubernetes?tab=PIPELINES]
+1. Logon to Gravity UI and go to <kbd>Kubernetes</kbd> -> <kbd>Pipelines</kbd> -> <kbd>Pipeline Charts</kbd> OR visit [Console Here](https://console.gravitycloud.ai/kubernetes?tab=PIPELINES)
 
 2. Click on <kbd>Create a new Pipeline Chart</kbd>
 ![Create a new Pipeline Chart](https://res.cloudinary.com/dor5uewzz/image/upload/v1731921421/k8s-pipeline-charts_p4wfiu.png)
