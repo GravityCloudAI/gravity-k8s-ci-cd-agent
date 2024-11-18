@@ -54,6 +54,30 @@ spec:
 ```
 3. Update Github Action workflow with name as `Deploy` and only run CI, tests and any business logic to generate values file (such as secrets, no need to manage docker images)
 
+4. You can also add `pre-deploy` scripts to run any commands before the deployment (such as linting, testing, etc.)
+```yaml
+metadata:
+  name: mono-repo-js
+spec:
+  branch:
+    - name: main
+      approval: manual
+    - name: development
+      approval: automatic
+    - name: feat-.*
+      approval: automatic
+  preDeploy:
+    - name: run dummy script
+      command: bash ./dummy.sh
+  aws:
+    repository:
+      - name: mono-repo-js-east
+        regions:
+          - us-east-1
+        branch: main
+        valueFile:
+          source: git
+```
 
 ### Gravity K8s Agent
 
@@ -464,6 +488,20 @@ rules:
 2. Run `export $(grep -v '^#' example.env | xargs) && envsubst < deployment.yaml > deployment_subst.yaml` to generate the deployment.yaml file with the actual values.
 
 3. Deploy the application to Kubernetes using `kubectl apply -f deployment_subst.yaml`.
+
+### Custom Helm Charts (feature/dev environments)
+1. Logon to Gravity UI and go to <kbd>Kubernetes</kbd> -> <kbd>Pipelines</kbd> -> <kbd>Pipeline Charts</kbd> OR visit (https://console.gravitycloud.ai/kubernetes?tab=PIPELINES)[https://console.gravitycloud.ai/kubernetes?tab=PIPELINES]
+
+2. Click on <kbd>Create a new Pipeline Chart</kbd>
+![Create a new Pipeline Chart](https://res.cloudinary.com/dor5uewzz/image/upload/v1731921421/k8s-pipeline-charts_p4wfiu.png)
+
+3. Select the pre-defined chart and edit the values file as per your requirement
+![Edit Pipeline Chart](https://res.cloudinary.com/dor5uewzz/image/upload/v1731921421/k8s-pipeline-charts-add_zoiaqo.png)
+
+4. Once added, the agent will automatically sync the changes and deploy the helm chart to the respective environment when the new branch is created or updated.
+
+5. Upon the deletion of the branch, the agent will delete the helm chart from the respective environment.
+
 
 ### Working
 1. The agent syncs with the repository and checks if there are any new CI actions completed.
