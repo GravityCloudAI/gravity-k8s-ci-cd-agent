@@ -964,6 +964,11 @@ const processJob = async () => {
 													const valuesFilePath = path.join(tempDir, `${chart.chartName}-values-${lastRunBranch}.yaml`)
 													fs.writeFileSync(valuesFilePath, chart.valuesFile)
 
+													// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
+													const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
+													const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
+													fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
+
 													syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying chart: ${JSON.stringify(chart)}`, false)
 
 													//  need to add repository to via helm repo add
