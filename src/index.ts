@@ -960,8 +960,10 @@ const processJob = async () => {
 											if (pipelineCharts?.charts?.length > 0) {
 												await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
 
+													const cleanChartName = chart?.chartName?.replace('/', '_')
+
 													const tempDir = os.tmpdir()
-													const valuesFilePath = path.join(tempDir, `${chart.chartName}-values-${lastRunBranch}.yaml`)
+													const valuesFilePath = path.join(tempDir, `${cleanChartName}-values-${lastRunBranch}.yaml`)
 													fs.writeFileSync(valuesFilePath, chart.valuesFile)
 
 													// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
@@ -977,12 +979,12 @@ const processJob = async () => {
 
 													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, "helm repo update", false)
 
-													const helmChartInstallCommand = `helm upgrade --install ${chart.chartName}-${lastRunBranch} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${newLocalValuesFilePath}`
+													const helmChartInstallCommand = `helm upgrade --install ${cleanChartName}-${lastRunBranch} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${newLocalValuesFilePath}`
 													console.log(`Helm command: ${helmChartInstallCommand}`)
 													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, false)
 												}))
 
-												await client?.query("INSERT INTO helm_deployments (runId, branch, namespace, status, charts, updated_at) VALUES ($1, $2, $3, $4, $5, $6)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName).join(","), new Date()])
+												await client?.query("INSERT INTO helm_deployments (runId, branch, namespace, status, charts, updated_at) VALUES ($1, $2, $3, $4, $5, $6)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName?.replace('/', '_')).join(","), new Date()])
 											}
 										}
 
