@@ -1,4 +1,4 @@
-FROM node:20-bookworm
+FROM node:22.11.0-bookworm
 
 # Install dependencies for Buildah and Docker
 RUN apt-get update \
@@ -26,6 +26,18 @@ RUN pip3 install awscli --upgrade --break-system-packages
 
 # Set AWS CLI pager to empty
 RUN aws configure set cli_pager ""
+
+# install kubectl
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH"; exit 1; \
+    fi && \
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/$ARCH/kubectl" && \
+    install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 
 # Install Helm
 RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \

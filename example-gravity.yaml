@@ -32,3 +32,6 @@ spec:
         valueFile:
           source: s3
           bucket: gravity-app-prod-values/feat-.*
+        argoApplicationFile:
+          source: s3
+          bucket: gravity-app-prod-values/feat-.*

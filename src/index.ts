@@ -912,15 +912,6 @@ const processJob = async () => {
 
 												newValuesFiles.push(JSON.stringify({ name: path.basename(latestValueFileFromS3Bucket), previousContent: valuesFileContent, newContent: yaml.stringify(parsedValuesFile) }))
 
-												syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
-
-												if (!process.env.ARGOCD_URL) {
-													console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${lastRunBranch}`)
-												} else {
-													await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL, process.env.ARGOCD_TOKEN!!)
-												}
-												sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
-
 											} catch (error) {
 												console.error(`Error updating ${repoDetails?.valueFile?.bucket}: ${error}`)
 												await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
@@ -928,6 +919,61 @@ const processJob = async () => {
 												sendSlackNotification("S3 File Update Failed", `Error updating ${repoDetails?.valueFile?.bucket} for ${lastRunBranch} in ${region}: ${error}`)
 											}
 										}
+
+										syncLogsToGravityViaWebsocket(deploymentRunId, "SYNC_ARGOCD", serviceName, `Syncing ArgoCD for ${serviceName} in ${repository} at ${region}`)
+
+										if (!process.env.ARGOCD_URL) {
+											console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${lastRunBranch}`)
+										} else {
+											if (service.gravityConfig?.spec?.argoApplicationFile) {
+												// get the file from s3
+												let argoApplicationFilePath = service.gravityConfig?.spec?.argoApplicationFile?.bucket
+												let s3BucketName = argoApplicationFilePath
+												let s3Prefix = ''
+
+												if (argoApplicationFilePath?.includes('/')) {
+													const parts = argoApplicationFilePath.split('/')
+													s3BucketName = parts[0]
+
+													const processedParts = parts.slice(1).map((part: string) => {
+														if (part.endsWith('.*')) {
+															return lastRunBranch
+														}
+														return part
+													})
+
+													s3Prefix = processedParts.join('/')
+												}
+
+												let latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												if (!latestArgoApplicationFileFromS3Bucket) {
+													console.error(`No value file found in ${argoApplicationFilePath}`)
+													return
+												}
+
+												latestArgoApplicationFileFromS3Bucket = latestArgoApplicationFileFromS3Bucket.trim()
+
+												const tempDir = os.tmpdir()
+												const localFilePath = path.join(tempDir, path.basename(latestArgoApplicationFileFromS3Bucket))
+
+												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestArgoApplicationFileFromS3Bucket)} ${localFilePath}`, true)
+
+												const argoApplicationFileContent = fs.readFileSync(localFilePath, 'utf8')
+
+												if (!argoApplicationFileContent) {
+													console.error(`Error getting argo application file content from ${argoApplicationFilePath}`)
+													return
+												}
+
+												fs.writeFileSync(localFilePath, argoApplicationFileContent)
+
+												const kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
+												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, kubectlApplyCommand, false)
+											} else {
+												await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL, process.env.ARGOCD_TOKEN!!)
+											}
+										}
+										sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
 
 										const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
 											// Check for exact match first
@@ -979,6 +1025,7 @@ const processJob = async () => {
 
 													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, "helm repo update", false)
 
+													// remove branch name from chart name
 													const helmChartInstallCommand = `helm upgrade --install ${cleanChartName}-${lastRunBranch} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${newLocalValuesFilePath}`
 													console.log(`Helm command: ${helmChartInstallCommand}`)
 													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, false)
