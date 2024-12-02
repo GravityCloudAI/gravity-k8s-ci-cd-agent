@@ -191,6 +191,10 @@ interface AWSRepository {
 		source: string
 		bucket?: string
 	}
+	argoApplicationFile?: {
+		source: string
+		bucket?: string
+	}
 }
 
 const syncLogsToGravityViaWebsocket = async (runId: string, action: string, serviceName: string, message: string, isError: boolean = false) => {
@@ -202,7 +206,7 @@ const syncLogsToGravityViaWebsocket = async (runId: string, action: string, serv
 let socket: Socket | null = null
 
 if (process.env.GRAVITY_API_KEY) {
-	socket = io(process.env.GRAVITY_WEBSOCKET_URL, {
+	socket = io(`${process.env.GRAVITY_WEBSOCKET_URL}?isAgent=${process.env.PROCESS_JOB}`, {
 		transports: ['websocket'],
 		reconnection: true,
 		reconnectionAttempts: 5,
@@ -484,21 +488,42 @@ const processBranchDeletions = async (branches: any) => {
 		SELECT * FROM helm_deployments 
 		WHERE branch IN (SELECT DISTINCT branch FROM helm_deployments)
 	`)
+
 	// check if the branches are deleted, if so delete the helm deployments from the table
 	for (const elem of branchesWithHelmDeployments?.rows) {
 		if (!branches.find((b: any) => b.name === elem.branch)) {
 			await Promise.all(elem.charts.split(",").map(async (chart: string) => {
 				console.log(`Uninstalling Helm Chart ${chart}from namespace ${elem.branch}`)
 				await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart} -n ${elem.branch}`, true)
+
+				sendSlackNotification("Helm Deployment Deleted", `Helm Deployment ${chart} deleted for ${elem.branch}`)
 			}))
 
 			await client?.query("DELETE FROM helm_deployments WHERE branch = $1", [elem.branch])
+		}
+	}
 
+	const argoBranchesWithDeployments = await client?.query(`
+		SELECT * FROM argo_deployments 
+		WHERE branch IN (SELECT DISTINCT branch FROM argo_deployments)
+	`)
+
+	for (const elem of argoBranchesWithDeployments?.rows) {
+		if (!branches.find((b: any) => b.name === elem.branch)) {
 			const argoDeployments = await client?.query("SELECT * FROM argo_deployments WHERE branch = $1", [elem.branch])
 			await Promise.all(argoDeployments?.rows?.map(async (argoDeployment: any) => {
-				const localFilePath = path.join(os.tmpdir(), argoDeployment.valuesFile)
-				await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.serviceName, `kubectl delete -f ${localFilePath} -n ${argoDeployment.namespace}`, true)
+				console.log(JSON.stringify(argoDeployment, null, 2))
+				// string to yaml conversion
+				const argoFileYamlFileAsString = argoDeployment.valuesfile
+
+				const localFilePath = path.join(os.tmpdir(), `${argoDeployment.serviceName}-${elem.branch}.yaml`)
+				fs.writeFileSync(localFilePath, argoFileYamlFileAsString)
+
+				await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.serviceName, `kubectl delete -f ${localFilePath}`, true)
 				await client?.query("DELETE FROM argo_deployments WHERE branch = $1 AND serviceName = $2", [elem.branch, argoDeployment.serviceName])
+				fs.unlinkSync(localFilePath)
+
+				sendSlackNotification("Argo Deployment Deleted", `Argo Deployment ${argoDeployment.serviceName} deleted for ${elem.branch}`)
 			}))
 		}
 	}
@@ -559,6 +584,13 @@ const syncGitRepo = async () => {
 						console.log(`Branch ${branch} not in allowed list, skipping`)
 						continue;
 					} else {
+
+						// check if the branch even exists in the repo
+						if (!branches.find((b: any) => b.name === branch)) {
+							console.log(`Branch ${branch} does not exist in the repo, skipping`)
+							continue
+						}
+
 						// check if the latestDeployRun was within 30 minutes
 						if (new Date(latestDeployRun.updated_at).getTime() > Date.now() - 30 * 60 * 1000) {
 							console.log(`Branch ${branch} matches, processing`)
@@ -894,7 +926,9 @@ const processJob = async () => {
 													s3Prefix = processedParts.join('/')
 												}
 
-												let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												console.log(`s3Prefixs3Prefixs3Prefixs3Prefixs3Prefixs3Prefix: ${s3Prefix}`)
+
+												let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''}  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
 												if (!latestValueFileFromS3Bucket) {
 													console.error(`No value file found in ${valueFilesPath}`)
 													return
@@ -968,9 +1002,9 @@ const processJob = async () => {
 										if (!process.env.ARGOCD_URL) {
 											console.log(`ArgoCD URL not found, skipping sync for ${serviceName} in ${lastRunBranch}`)
 										} else {
-											if (service.gravityConfig?.spec?.argoApplicationFile) {
+											if (repoDetails?.argoApplicationFile?.source === "s3") {
 												// get the file from s3
-												let argoApplicationFilePath = service.gravityConfig?.spec?.argoApplicationFile?.bucket
+												let argoApplicationFilePath = repoDetails.argoApplicationFile?.bucket
 												let s3BucketName = argoApplicationFilePath
 												let s3Prefix = ''
 
@@ -984,11 +1018,10 @@ const processJob = async () => {
 														}
 														return part
 													})
-
 													s3Prefix = processedParts.join('/')
 												}
 
-												let latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix ${s3Prefix}` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												let latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
 												if (!latestArgoApplicationFileFromS3Bucket) {
 													console.error(`No value file found in ${argoApplicationFilePath}`)
 													return
