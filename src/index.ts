@@ -133,6 +133,41 @@ const checkAndCreateDatabaseTables = async () => {
 			client.release()
 		}
 	})();
+
+	(async () => {
+		const client = await getDbConnection()
+		try {
+			const tableExistsQuery = `
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_name = 'argo_deployments'
+			)
+		`
+			const { rows } = await client.query(tableExistsQuery)
+			console.log("argo_deployments: ", rows)
+			if (!rows[0].exists) {
+				console.log("Table 'argo_deployments' does not exist, creating table")
+				const createTableQuery = `
+				CREATE TABLE argo_deployments (
+					runId TEXT PRIMARY KEY,
+					branch TEXT,
+					namespace TEXT,
+					status TEXT,
+					serviceName TEXT,
+					valuesFile TEXT,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				)
+			`
+				await client.query(createTableQuery)
+			} else {
+				console.log("Table 'helm_deployments' already exists")
+			}
+		} catch (err) {
+			console.error("Error checking or creating table:", err)
+		} finally {
+			client.release()
+		}
+	})();
 }
 
 if (!process.env.PROCESS_JOB) {
@@ -441,7 +476,7 @@ const sendDetailsToAgentJob = async (details: any) => {
 	redisClient.publish("agent-job", Buffer.from(JSON.stringify(details)).toString('base64'))
 }
 
-const processHelmDeployments = async (branches: any) => {
+const processBranchDeletions = async (branches: any) => {
 	// check for branches that had helm deployments, if they are deleted, delete the helm deployments from the table
 
 	const client = await getDbConnection()
@@ -453,11 +488,18 @@ const processHelmDeployments = async (branches: any) => {
 	for (const elem of branchesWithHelmDeployments?.rows) {
 		if (!branches.find((b: any) => b.name === elem.branch)) {
 			await Promise.all(elem.charts.split(",").map(async (chart: string) => {
-				console.log(`Uninstalling Helm Chart ${chart}-${elem.branch} from namespace ${elem.branch}`)
-				await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart}-${elem.branch} -n ${elem.branch}`, true)
+				console.log(`Uninstalling Helm Chart ${chart}from namespace ${elem.branch}`)
+				await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart} -n ${elem.branch}`, true)
 			}))
 
 			await client?.query("DELETE FROM helm_deployments WHERE branch = $1", [elem.branch])
+
+			const argoDeployments = await client?.query("SELECT * FROM argo_deployments WHERE branch = $1", [elem.branch])
+			await Promise.all(argoDeployments?.rows?.map(async (argoDeployment: any) => {
+				const localFilePath = path.join(os.tmpdir(), argoDeployment.valuesFile)
+				await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.serviceName, `kubectl delete -f ${localFilePath} -n ${argoDeployment.namespace}`, true)
+				await client?.query("DELETE FROM argo_deployments WHERE branch = $1 AND serviceName = $2", [elem.branch, argoDeployment.serviceName])
+			}))
 		}
 	}
 }
@@ -481,7 +523,7 @@ const syncGitRepo = async () => {
 					repo
 				})
 
-				processHelmDeployments(branches)
+				processBranchDeletions(branches)
 
 				// Get latest deploy run
 				const githubActionsStatus = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
@@ -670,6 +712,8 @@ const processJob = async () => {
 
 			const [owner, repo] = repository.split('/')
 
+			const lastRunBranch = latestDeployRun.head_branch
+
 			await Promise.all(services.map(async (service: any) => {
 				try {
 					if (!service.hasChanges) {
@@ -696,7 +740,6 @@ const processJob = async () => {
 					const cloneUrl = `https://x-access-token:${githubToken}@github.com/${repository}.git`
 					await customExec(deploymentRunId, "GIT_CLONE", serviceName, `git clone ${cloneUrl} ${gitRepoPath}`)
 
-					const lastRunBranch = latestDeployRun.head_branch
 
 					if (service.gravityConfig?.spec?.preDeploy) {
 						await Promise.all(service.gravityConfig?.spec?.preDeploy?.map(async (preDeployStep: any) => {
@@ -969,71 +1012,13 @@ const processJob = async () => {
 
 												const kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
 												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, kubectlApplyCommand, false)
+												await client?.query("INSERT INTO argo_deployments (runId, branch, namespace, status, serviceName, valuesFile, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", serviceName, argoApplicationFileContent, new Date()])
+												fs.unlinkSync(localFilePath)
 											} else {
 												await syncArgoCD(deploymentRunId, serviceName, lastRunBranch, process.env.ARGOCD_URL, process.env.ARGOCD_TOKEN!!)
 											}
 										}
 										sendSlackNotification("ArgoCD Synced", `ArgoCD synced for ${serviceName} in ${repository} at ${region}`)
-
-										const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
-											// Check for exact match first
-											if (allowedBranch === lastRunBranch) {
-												return allowedBranch;
-											}
-											// Check for wildcard pattern match
-											if (allowedBranch.endsWith('.*')) {
-												const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-												const pattern = new RegExp(`^${prefix}.*$`);
-												if (pattern.test(lastRunBranch)) {
-													return allowedBranch;
-												}
-											}
-
-											return false
-										});
-
-										if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
-											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", serviceName, `Fetching chart dependecies for branch: ${matchedAllowedRegex}`, false)
-											const pipelineChartsRez = await axios.post<PipelineCharts>(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/pipeline-charts`, {
-												awsAccountId: process.env.AWS_ACCOUNT_ID,
-												gravityApiKey: process.env.GRAVITY_API_KEY,
-												branch: matchedAllowedRegex
-											})
-
-											const pipelineCharts = pipelineChartsRez?.data
-
-											syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Found following charts: ${JSON.stringify(pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName)) ?? "None"}`, false)
-											if (pipelineCharts?.charts?.length > 0) {
-												await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
-
-													const cleanChartName = chart?.chartName?.replace('/', '_')
-
-													const tempDir = os.tmpdir()
-													const valuesFilePath = path.join(tempDir, `${cleanChartName}-values-${lastRunBranch}.yaml`)
-													fs.writeFileSync(valuesFilePath, chart.valuesFile)
-
-													// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
-													const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
-													const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
-													fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
-
-													syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", serviceName, `Deploying chart: ${JSON.stringify(chart)}`, false)
-
-													//  need to add repository to via helm repo add
-													const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
-													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmRepoAddCommand, false)
-
-													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, "helm repo update", false)
-
-													// remove branch name from chart name
-													const helmChartInstallCommand = `helm upgrade --install ${cleanChartName}-${lastRunBranch} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${newLocalValuesFilePath}`
-													console.log(`Helm command: ${helmChartInstallCommand}`)
-													await customExec(deploymentRunId, "CHART_DEPLOYMENT", serviceName, helmChartInstallCommand, false)
-												}))
-
-												await client?.query("INSERT INTO helm_deployments (runId, branch, namespace, status, charts, updated_at) VALUES ($1, $2, $3, $4, $5, $6)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName?.replace('/', '_')).join(","), new Date()])
-											}
-										}
 
 										if (newLocalValuesFilePath) {
 											fs.unlinkSync(newLocalValuesFilePath)
@@ -1075,6 +1060,68 @@ const processJob = async () => {
 					sendSlackNotification("Deployment Failed", `Error processing service ${service.servicePath} for ${repository}: ${error}`)
 				}
 			}))
+
+			const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
+				// Check for exact match first
+				if (allowedBranch === lastRunBranch) {
+					return allowedBranch;
+				}
+				// Check for wildcard pattern match
+				if (allowedBranch.endsWith('.*')) {
+					const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+					const pattern = new RegExp(`^${prefix}.*$`);
+					if (pattern.test(lastRunBranch)) {
+						return allowedBranch;
+					}
+				}
+
+				return false
+			});
+
+			if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
+				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", lastRunBranch, `Fetching chart dependecies for branch: ${lastRunBranch}`, false)
+				const pipelineChartsRez = await axios.post<PipelineCharts>(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/pipeline-charts`, {
+					awsAccountId: process.env.AWS_ACCOUNT_ID,
+					gravityApiKey: process.env.GRAVITY_API_KEY,
+					branch: matchedAllowedRegex
+				})
+
+				const pipelineCharts = pipelineChartsRez?.data
+
+				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, `Found following charts: ${JSON.stringify(pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName)) ?? "None"}`, false)
+				if (pipelineCharts?.charts?.length > 0) {
+					await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
+
+						const cleanChartName = chart?.chartName?.replace('/', '_')
+
+						const tempDir = os.tmpdir()
+						const valuesFilePath = path.join(tempDir, `${cleanChartName}-values-${lastRunBranch}.yaml`)
+						fs.writeFileSync(valuesFilePath, chart.valuesFile)
+
+						// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
+						const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
+						const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
+						fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
+
+						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, `Deploying chart: ${JSON.stringify(chart)}`, false)
+
+						//  need to add repository to via helm repo add
+						const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
+						await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmRepoAddCommand, false)
+
+						await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, "helm repo update", false)
+
+						// remove branch name from chart name
+						const helmChartInstallCommand = `helm upgrade --install ${cleanChartName} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${valuesFilePath}`
+						console.log(`Helm command: ${helmChartInstallCommand}`)
+						await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmChartInstallCommand, false)
+						fs.unlinkSync(valuesFilePath)
+					}))
+
+					await client?.query("INSERT INTO helm_deployments (runId, branch, namespace, status, charts, updated_at) VALUES ($1, $2, $3, $4, $5, $6)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName?.replace('/', '_')).join(","), new Date()])
+				}
+			}
+
 		} catch (error) {
 			console.error(`Error parsing job data: ${error}`)
 			throw error
