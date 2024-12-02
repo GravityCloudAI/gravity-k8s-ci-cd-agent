@@ -1112,7 +1112,7 @@ const processJob = async () => {
 			});
 
 			if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
-				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", lastRunBranch, `Fetching chart dependecies for branch: ${lastRunBranch}`, false)
+				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", `[pipeline] ${lastRunBranch}`, `Fetching chart dependecies for branch: ${lastRunBranch}`, false)
 				const pipelineChartsRez = await axios.post<PipelineCharts>(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/pipeline-charts`, {
 					awsAccountId: process.env.AWS_ACCOUNT_ID,
 					gravityApiKey: process.env.GRAVITY_API_KEY,
@@ -1121,7 +1121,7 @@ const processJob = async () => {
 
 				const pipelineCharts = pipelineChartsRez?.data
 
-				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, `Found following charts: ${JSON.stringify(pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName)) ?? "None"}`, false)
+				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, `Found following charts: ${JSON.stringify(pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName)) ?? "None"}`, false)
 				if (pipelineCharts?.charts?.length > 0) {
 					await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
 
@@ -1136,7 +1136,7 @@ const processJob = async () => {
 						const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
 						fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
 
-						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, `Deploying chart: ${JSON.stringify(chart)}`, false)
+						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, `Deploying chart: ${JSON.stringify(chart)}`, false)
 
 						//  need to add repository to via helm repo add
 						const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
