@@ -357,8 +357,12 @@ const sendSlackNotification = async (title: string, message: string) => {
 		console.log("Slack webhook URL not found, skipping notification")
 		return
 	}
-	const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL
-	await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` })
+	try {
+		const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL
+		await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` })
+	} catch (error) {
+		console.error(`Error sending Slack notification:`, error)
+	}
 }
 
 const syncArgoCD = async (deploymentRunId: string, serviceName: string, branch: string, argoCDUrl: string, token: string) => {
