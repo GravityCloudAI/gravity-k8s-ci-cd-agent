@@ -493,8 +493,12 @@ const processBranchDeletions = async (branches: any) => {
 	for (const elem of branchesWithHelmDeployments?.rows) {
 		if (!branches.find((b: any) => b.name === elem.branch)) {
 			await Promise.all(elem.charts.split(",").map(async (chart: string) => {
-				console.log(`Uninstalling Helm Chart ${chart}from namespace ${elem.branch}`)
-				await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart} -n ${elem.branch}`, true)
+				try {
+					console.log(`Uninstalling Helm Chart ${chart}from namespace ${elem.branch}`)
+					await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart} -n ${elem.branch}`, true)
+				} catch (error) {
+					console.error(`Error uninstalling Helm Chart ${chart} from namespace ${elem.branch}:`, error)
+				}
 
 				sendSlackNotification("Helm Deployment Deleted", `Helm Deployment ${chart} deleted for ${elem.branch}`)
 			}))
@@ -512,20 +516,41 @@ const processBranchDeletions = async (branches: any) => {
 		if (!branches.find((b: any) => b.name === elem.branch)) {
 			const argoDeployments = await client?.query("SELECT * FROM argo_deployments WHERE branch = $1", [elem.branch])
 			await Promise.all(argoDeployments?.rows?.map(async (argoDeployment: any) => {
-				console.log(JSON.stringify(argoDeployment, null, 2))
-				// string to yaml conversion
-				const argoFileYamlFileAsString = argoDeployment.valuesfile
+				try {
+					const argoFileYamlFileAsString = argoDeployment.valuesfile
 
-				const localFilePath = path.join(os.tmpdir(), `${argoDeployment.serviceName}-${elem.branch}.yaml`)
-				fs.writeFileSync(localFilePath, argoFileYamlFileAsString)
+					const localFilePath = path.join(os.tmpdir(), `${argoDeployment.servicename}-${elem.branch}.yaml`)
+					fs.writeFileSync(localFilePath, argoFileYamlFileAsString)
 
-				await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.serviceName, `kubectl delete -f ${localFilePath}`, true)
-				await client?.query("DELETE FROM argo_deployments WHERE branch = $1 AND serviceName = $2", [elem.branch, argoDeployment.serviceName])
-				fs.unlinkSync(localFilePath)
+					await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.servicename, `kubectl delete -f ${localFilePath}`, true)
+					await client?.query("DELETE FROM argo_deployments WHERE branch = $1 AND servicename = $2", [elem.branch, argoDeployment.servicename])
+					fs.unlinkSync(localFilePath)
 
-				sendSlackNotification("Argo Deployment Deleted", `Argo Deployment ${argoDeployment.serviceName} deleted for ${elem.branch}`)
+					sendSlackNotification("Argo Deployment Deleted", `Argo Deployment ${argoDeployment.servicename} deleted for ${elem.branch}`)
+				} catch (error) {
+					console.error(`Error deleting Argo Deployment ${argoDeployment.servicename} for ${elem.branch}:`, error)
+				}
 			}))
 		}
+	}
+}
+
+const syncMetaDataWithGravity = async (repository: string, branches: any) => {
+	try {
+		const client = await getDbConnection()
+		const argoApps = await client?.query("SELECT * FROM argo_apps")
+		const helmDeployments = await client?.query("SELECT * FROM helm_deployments")
+
+		const syncResponse = await axios.post(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/sync-metadata`, {
+			awsAccountId: process.env.AWS_ACCOUNT_ID,
+			gravityApiKey: process.env.GRAVITY_API_KEY,
+			branches: branches,
+			repository: repository,
+			argoApps: argoApps?.rows,
+			helmDeployments: helmDeployments?.rows
+		})
+	} catch (error) {
+		console.error(`Error syncing metadata with Gravity:`, error)
 	}
 }
 
@@ -549,6 +574,7 @@ const syncGitRepo = async () => {
 				})
 
 				processBranchDeletions(branches)
+				syncMetaDataWithGravity(repository, branches)
 
 				// Get latest deploy run
 				const githubActionsStatus = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
