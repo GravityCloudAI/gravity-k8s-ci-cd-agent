@@ -542,7 +542,7 @@ const processBranchDeletions = async (branches: any) => {
 const syncMetaDataWithGravity = async (repository: string, branches: any) => {
 	try {
 		const client = await getDbConnection()
-		const argoApps = await client?.query("SELECT * FROM argo_apps")
+		const argoApps = await client?.query("SELECT * FROM argo_deployments")
 		const helmDeployments = await client?.query("SELECT * FROM helm_deployments")
 
 		const syncResponse = await axios.post(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/sync-metadata`, {
