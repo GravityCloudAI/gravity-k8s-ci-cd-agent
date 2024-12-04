@@ -12,6 +12,9 @@ import redis from 'redis'
 import { spawn } from "child_process"
 import https from 'https'
 
+let isRunning = false;
+const syncInterval = 30000;
+
 interface ServiceChange {
 	servicePath: string
 	hasChanges: boolean
@@ -180,7 +183,12 @@ if (!process.env.PROCESS_JOB) {
 }
 
 async function getDbConnection() {
-	return await pool.connect()
+	try {
+		return await pool.connect()
+	} catch (error) {
+		console.error(`Error getting database connection:`, error)
+		throw error
+	}
 }
 
 interface AWSRepository {
@@ -487,63 +495,68 @@ const sendDetailsToAgentJob = async (details: any) => {
 }
 
 const processBranchDeletions = async (branches: any) => {
-	// check for branches that had helm deployments, if they are deleted, delete the helm deployments from the table
-
 	const client = await getDbConnection()
-	const branchesWithHelmDeployments = await client?.query(`
+	try {
+		const branchesWithHelmDeployments = await client?.query(`
 		SELECT * FROM helm_deployments 
 		WHERE branch IN (SELECT DISTINCT branch FROM helm_deployments)
 	`)
 
-	// check if the branches are deleted, if so delete the helm deployments from the table
-	for (const elem of branchesWithHelmDeployments?.rows) {
-		if (!branches.find((b: any) => b.name === elem.branch)) {
-			await Promise.all(elem.charts.split(",").map(async (chart: string) => {
-				try {
-					console.log(`Uninstalling Helm Chart ${chart}from namespace ${elem.branch}`)
-					await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart} -n ${elem.branch}`, true)
-				} catch (error) {
-					console.error(`Error uninstalling Helm Chart ${chart} from namespace ${elem.branch}:`, error)
-				}
+		// check if the branches are deleted, if so delete the helm deployments from the table
+		for (const elem of branchesWithHelmDeployments?.rows) {
+			if (!branches.find((b: any) => b.name === elem.branch)) {
+				await Promise.all(elem.charts.split(",").map(async (chart: string) => {
+					try {
+						console.log(`Uninstalling Helm Chart ${chart}from namespace ${elem.branch}`)
+						await customExec("", "DELETE_HELM_DEPLOYMENTS", "", `helm uninstall ${chart} -n ${elem.branch}`, true)
+					} catch (error) {
+						console.error(`Error uninstalling Helm Chart ${chart} from namespace ${elem.branch}:`, error)
+					}
 
-				sendSlackNotification("Helm Deployment Deleted", `Helm Deployment ${chart} deleted for ${elem.branch}`)
-			}))
+					sendSlackNotification("Helm Deployment Deleted", `Helm Deployment ${chart} deleted for ${elem.branch}`)
+				}))
 
-			await client?.query("DELETE FROM helm_deployments WHERE branch = $1", [elem.branch])
+				await client?.query("DELETE FROM helm_deployments WHERE branch = $1", [elem.branch])
+			}
 		}
-	}
 
-	const argoBranchesWithDeployments = await client?.query(`
+		const argoBranchesWithDeployments = await client?.query(`
 		SELECT * FROM argo_deployments 
 		WHERE branch IN (SELECT DISTINCT branch FROM argo_deployments)
 	`)
 
-	for (const elem of argoBranchesWithDeployments?.rows) {
-		if (!branches.find((b: any) => b.name === elem.branch)) {
-			const argoDeployments = await client?.query("SELECT * FROM argo_deployments WHERE branch = $1", [elem.branch])
-			await Promise.all(argoDeployments?.rows?.map(async (argoDeployment: any) => {
-				try {
-					const argoFileYamlFileAsString = argoDeployment.valuesfile
+		for (const elem of argoBranchesWithDeployments?.rows) {
+			if (!branches.find((b: any) => b.name === elem.branch)) {
+				const argoDeployments = await client?.query("SELECT * FROM argo_deployments WHERE branch = $1", [elem.branch])
+				await Promise.all(argoDeployments?.rows?.map(async (argoDeployment: any) => {
+					try {
+						const argoFileYamlFileAsString = argoDeployment.valuesfile
 
-					const localFilePath = path.join(os.tmpdir(), `${argoDeployment.servicename}-${elem.branch}.yaml`)
-					fs.writeFileSync(localFilePath, argoFileYamlFileAsString)
+						const localFilePath = path.join(os.tmpdir(), `${argoDeployment.servicename}-${elem.branch}.yaml`)
+						fs.writeFileSync(localFilePath, argoFileYamlFileAsString)
 
-					await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.servicename, `kubectl delete -f ${localFilePath}`, true)
-					await client?.query("DELETE FROM argo_deployments WHERE branch = $1 AND servicename = $2", [elem.branch, argoDeployment.servicename])
-					fs.unlinkSync(localFilePath)
+						await customExec("", "DELETE_ARGO_DEPLOYMENT", argoDeployment.servicename, `kubectl delete -f ${localFilePath}`, true)
+						await client?.query("DELETE FROM argo_deployments WHERE branch = $1 AND servicename = $2", [elem.branch, argoDeployment.servicename])
+						fs.unlinkSync(localFilePath)
 
-					sendSlackNotification("Argo Deployment Deleted", `Argo Deployment ${argoDeployment.servicename} deleted for ${elem.branch}`)
-				} catch (error) {
-					console.error(`Error deleting Argo Deployment ${argoDeployment.servicename} for ${elem.branch}:`, error)
-				}
-			}))
+						sendSlackNotification("Argo Deployment Deleted", `Argo Deployment ${argoDeployment.servicename} deleted for ${elem.branch}`)
+					} catch (error) {
+						console.error(`Error deleting Argo Deployment ${argoDeployment.servicename} for ${elem.branch}:`, error)
+					}
+				}))
+			}
 		}
+	} catch (error) {
+		console.error(`Error processing branch deletions:`, error)
+	} finally {
+		client?.release()
 	}
+	return true
 }
 
 const syncMetaDataWithGravity = async (repository: string, branches: any) => {
+	const client = await getDbConnection()
 	try {
-		const client = await getDbConnection()
 		const argoApps = await client?.query("SELECT * FROM argo_deployments")
 		const helmDeployments = await client?.query("SELECT * FROM helm_deployments")
 		const syncResponse = await axios.post(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/sync-metadata`, {
@@ -556,6 +569,8 @@ const syncMetaDataWithGravity = async (repository: string, branches: any) => {
 		})
 	} catch (error) {
 		console.error(`Error syncing metadata with Gravity:`, error)
+	} finally {
+		client?.release()
 	}
 }
 
@@ -735,24 +750,26 @@ const syncGitRepo = async () => {
 				sendSlackNotification("Deployment Failed", `Error processing repository ${repository}: ${error}`)
 			}
 		}
+
+		return true
 	} catch (error) {
 		console.error(`Error in syncGitRepo:`, error)
 		sendSlackNotification("Deployment Failed", `Error in syncGitRepo: ${error}`)
 	} finally {
 		client?.release()
+		return false
 	}
 }
 
 if (!process.env.PROCESS_JOB) {
 	setInterval(syncGitRepo, 30000)
 }
-
 if (process.env.ENV === "development") {
 	redisClient.on('error', (err: any) => console.error(err));
 	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
 	redisClient.connect();
 	checkAndCreateDatabaseTables()
-	syncGitRepo()
+	setInterval(syncGitRepo, 30000)
 }
 
 // ##########################################################
@@ -1245,8 +1262,14 @@ const processJob = async () => {
 		} catch (error) {
 			console.error(`Error parsing job data: ${error}`)
 			throw error
+		} finally {
+			client?.release()
+			return true
 		}
 	}
+
+	deploymentRunId = undefined
+	return true
 }
 
 const cleanup = async () => {
