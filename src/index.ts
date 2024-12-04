@@ -544,7 +544,6 @@ const syncMetaDataWithGravity = async (repository: string, branches: any) => {
 		const client = await getDbConnection()
 		const argoApps = await client?.query("SELECT * FROM argo_deployments")
 		const helmDeployments = await client?.query("SELECT * FROM helm_deployments")
-
 		const syncResponse = await axios.post(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/sync-metadata`, {
 			awsAccountId: process.env.AWS_ACCOUNT_ID,
 			gravityApiKey: process.env.GRAVITY_API_KEY,
@@ -576,9 +575,12 @@ const syncGitRepo = async () => {
 					owner,
 					repo
 				})
-
-				processBranchDeletions(branches)
-				syncMetaDataWithGravity(repository, branches)
+				try {
+					processBranchDeletions(branches)
+					syncMetaDataWithGravity(repository, branches)
+				} catch (error) {
+					console.error(`Error syncing metadata with Gravity for ${repository}:`, error)
+				}
 
 				// Get latest deploy run
 				const githubActionsStatus = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
@@ -748,7 +750,7 @@ if (process.env.ENV === "development") {
 	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
 	redisClient.connect();
 	checkAndCreateDatabaseTables()
-	syncGitRepo()
+	setInterval(syncGitRepo, 30000)
 }
 
 // ##########################################################
@@ -1155,30 +1157,36 @@ const processJob = async () => {
 				if (pipelineCharts?.charts?.length > 0) {
 					await Promise.all(pipelineCharts?.charts?.map(async (chart: ChartDetails) => {
 
-						const cleanChartName = chart?.chartName?.replace('/', '_')
+						try {
+							const cleanChartName = chart?.chartName?.replace('/', '_')
 
-						const tempDir = os.tmpdir()
-						const valuesFilePath = path.join(tempDir, `${cleanChartName}-values-${lastRunBranch}.yaml`)
-						fs.writeFileSync(valuesFilePath, chart.valuesFile)
+							const tempDir = os.tmpdir()
+							const valuesFilePath = path.join(tempDir, `${cleanChartName}-values-${lastRunBranch}.yaml`)
+							fs.writeFileSync(valuesFilePath, chart.valuesFile)
+	
+							// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
+							const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
+							const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
+							fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
+	
+							syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, `Deploying chart: ${JSON.stringify(chart)}`, false)
+	
+							//  need to add repository to via helm repo add
+							const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
+							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmRepoAddCommand, false)
+	
+							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, "helm repo update", false)
+	
+							// remove branch name from chart name
+							const helmChartInstallCommand = `helm upgrade --install ${cleanChartName} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${valuesFilePath}`
+							console.log(`Helm command: ${helmChartInstallCommand}`)
+							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmChartInstallCommand, false)
+							fs.unlinkSync(valuesFilePath)
+						} catch (error) {
+							console.error(`Error deploying chart ${chart.chartName}: ${error}`)
+							syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, `Error deploying chart ${chart.chartName}: ${error}`, false)
+						}
 
-						// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
-						const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
-						const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
-						fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
-
-						syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, `Deploying chart: ${JSON.stringify(chart)}`, false)
-
-						//  need to add repository to via helm repo add
-						const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
-						await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmRepoAddCommand, false)
-
-						await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, "helm repo update", false)
-
-						// remove branch name from chart name
-						const helmChartInstallCommand = `helm upgrade --install ${cleanChartName} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${valuesFilePath}`
-						console.log(`Helm command: ${helmChartInstallCommand}`)
-						await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmChartInstallCommand, false)
-						fs.unlinkSync(valuesFilePath)
 					}))
 
 					await client?.query("INSERT INTO helm_deployments (runId, branch, namespace, status, charts, updated_at) VALUES ($1, $2, $3, $4, $5, $6)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", pipelineCharts?.charts?.map((chart: ChartDetails) => chart.chartName?.replace('/', '_')).join(","), new Date()])
