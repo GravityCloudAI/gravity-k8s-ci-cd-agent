@@ -190,10 +190,12 @@ interface AWSRepository {
 	valueFile: {
 		source: string
 		bucket?: string
+		fileName?: string
 	}
 	argoApplicationFile?: {
 		source: string
 		bucket?: string
+		fileName?: string
 	}
 }
 
@@ -750,7 +752,7 @@ if (process.env.ENV === "development") {
 	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
 	redisClient.connect();
 	checkAndCreateDatabaseTables()
-	setInterval(syncGitRepo, 30000)
+	syncGitRepo()
 }
 
 // ##########################################################
@@ -958,9 +960,31 @@ const processJob = async () => {
 													s3Prefix = processedParts.join('/')
 												}
 
-												console.log(`s3Prefixs3Prefixs3Prefixs3Prefixs3Prefixs3Prefix: ${s3Prefix}`)
+												let latestValueFileFromS3Bucket = ""
 
-												let latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''}  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												let fileName = repoDetails?.valueFile?.fileName
+												if (fileName) {
+													// List all objects in the bucket with the given prefix
+													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
+													const listResult = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, listCommand, true)
+													const objects = JSON.parse(listResult).Contents
+
+													// Filter objects that contain the fileName pattern
+													const matchingFiles = objects
+														.map((obj: any) => obj.Key)
+														.filter((key: string) => key.includes(fileName))
+														.sort((a: string, b: string) => b.localeCompare(a))
+
+													if (matchingFiles.length > 0) {
+														latestValueFileFromS3Bucket = matchingFiles[0].trim()
+													} else {
+														console.error(`No files found matching pattern ${fileName} in ${s3BucketName}/${s3Prefix || ''}`)
+														return
+													}
+												} else {
+													latestValueFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''}  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												}
+
 												if (!latestValueFileFromS3Bucket) {
 													console.error(`No value file found in ${valueFilesPath}`)
 													return
@@ -1053,7 +1077,32 @@ const processJob = async () => {
 													s3Prefix = processedParts.join('/')
 												}
 
-												let latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''} --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+
+												let latestArgoApplicationFileFromS3Bucket = ""
+
+												let fileName = repoDetails?.argoApplicationFile?.fileName
+												if (fileName) {
+													// List all objects in the bucket with the given prefix
+													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
+													const listResult = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, listCommand, true)
+													const objects = JSON.parse(listResult).Contents
+
+													// Filter objects that contain the fileName pattern
+													const matchingFiles = objects
+														.map((obj: any) => obj.Key)
+														.filter((key: string) => key.includes(fileName))
+														.sort((a: string, b: string) => b.localeCompare(a))
+
+													if (matchingFiles.length > 0) {
+														latestArgoApplicationFileFromS3Bucket = matchingFiles[0].trim()
+													} else {
+														console.error(`No files found matching pattern ${fileName} in ${s3BucketName}/${s3Prefix || ''}`)
+														return
+													}
+												} else {
+													latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''}  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+												}
+
 												if (!latestArgoApplicationFileFromS3Bucket) {
 													console.error(`No value file found in ${argoApplicationFilePath}`)
 													return
@@ -1163,20 +1212,20 @@ const processJob = async () => {
 							const tempDir = os.tmpdir()
 							const valuesFilePath = path.join(tempDir, `${cleanChartName}-values-${lastRunBranch}.yaml`)
 							fs.writeFileSync(valuesFilePath, chart.valuesFile)
-	
+
 							// replace variables in the values file. Accepted variables: {{BRANCH_NAME}}, {{NAMESPACE}}
 							const valuesFileContent = fs.readFileSync(valuesFilePath, 'utf8')
 							const updatedValuesFileContent = valuesFileContent.replace(/{{BRANCH_NAME}}/g, lastRunBranch).replace(/{{NAMESPACE}}/g, lastRunBranch)
 							fs.writeFileSync(valuesFilePath, updatedValuesFileContent)
-	
+
 							syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, `Deploying chart: ${JSON.stringify(chart)}`, false)
-	
+
 							//  need to add repository to via helm repo add
 							const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
 							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmRepoAddCommand, false)
-	
+
 							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, "helm repo update", false)
-	
+
 							// remove branch name from chart name
 							const helmChartInstallCommand = `helm upgrade --install ${cleanChartName} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${valuesFilePath}`
 							console.log(`Helm command: ${helmChartInstallCommand}`)
