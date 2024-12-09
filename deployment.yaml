@@ -372,3 +372,6 @@ rules:
 - apiGroups: ["policy"]
   resources: ["podsecuritypolicies", "poddisruptionbudgets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["argoproj.io"]
+  resources: ["applications"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

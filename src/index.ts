@@ -436,7 +436,7 @@ const sendSlackNotification = async (title: string, message: string) => {
 		const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL
 		await axios.post(slackWebhookUrl, { text: `*${title}*\n${message}` })
 	} catch (error) {
-		console.error(`Error sending Slack notification:`, error)
+		console.error(`Error sending Slack notification:`)
 	}
 }
 
@@ -1272,7 +1272,7 @@ const processJob = async () => {
 												if (fileName) {
 													// List all objects in the bucket with the given prefix
 													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
-													const listResult = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, listCommand, true)
+													const listResult = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, listCommand, false)
 													const objects = JSON.parse(listResult).Contents
 
 													// Filter objects that contain the fileName pattern
@@ -1288,7 +1288,7 @@ const processJob = async () => {
 														return
 													}
 												} else {
-													latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "UPDATING_VALUES_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''}  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, true)
+													latestArgoApplicationFileFromS3Bucket = await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : ''}  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text`, false)
 												}
 
 												if (!latestArgoApplicationFileFromS3Bucket) {
@@ -1301,7 +1301,7 @@ const processJob = async () => {
 												const tempDir = os.tmpdir()
 												const localFilePath = path.join(tempDir, path.basename(latestArgoApplicationFileFromS3Bucket))
 
-												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestArgoApplicationFileFromS3Bucket)} ${localFilePath}`, true)
+												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 cp s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestArgoApplicationFileFromS3Bucket)} ${localFilePath}`, false)
 
 												const argoApplicationFileContent = fs.readFileSync(localFilePath, 'utf8')
 
