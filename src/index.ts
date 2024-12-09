@@ -11,9 +11,7 @@ const { Pool } = pg
 import redis from 'redis'
 import { spawn } from "child_process"
 import https from 'https'
-
-let isRunning = false;
-const syncInterval = 30000;
+import http from 'http';
 
 interface ServiceChange {
 	servicePath: string
@@ -173,6 +171,71 @@ const checkAndCreateDatabaseTables = async () => {
 	})();
 }
 
+let server: http.Server | null = null
+
+const startServer = () => {
+	const port = process.env.TRIGGER_PORT || 3000;
+
+	server = http.createServer(async (req, res) => {
+		// Only handle POST requests to /trigger
+		if (req.method !== 'POST' || req.url !== '/trigger') {
+			res.writeHead(404);
+			res.end(JSON.stringify({ error: 'Not found' }));
+			return;
+		}
+
+		try {
+			let body = '';
+			req.on('data', chunk => {
+				body += chunk.toString();
+			});
+
+			req.on('end', async () => {
+				try {
+					const { repository, branch } = JSON.parse(body);
+
+					if (!repository || !branch) {
+						res.writeHead(400, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({
+							error: 'Missing required parameters: repository, branch'
+						}));
+						return;
+					}
+
+					const result = await triggerDeployment(
+						repository,
+						branch
+					);
+
+					res.writeHead(200, {
+						'Content-Type': 'application/json',
+						'Access-Control-Allow-Origin': '*'
+					});
+					res.end(JSON.stringify(result));
+
+				} catch (error) {
+					console.error('Error processing request:', error);
+					res.writeHead(500, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({
+						error: error instanceof Error ? error.message : 'Internal server error'
+					}));
+				}
+			});
+
+		} catch (error) {
+			console.error('Error handling request:', error);
+			res.writeHead(500, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				error: 'Internal server error'
+			}));
+		}
+	});
+
+	server.listen(port, () => {
+		console.log(`Trigger service listening on port ${port}`);
+	});
+}
+
 if (!process.env.PROCESS_JOB) {
 	console.log("Skipping Redis connection because PROCESS_JOB is not set")
 	redisClient.on('error', (err: any) => console.error(err));
@@ -180,6 +243,8 @@ if (!process.env.PROCESS_JOB) {
 	redisClient.connect();
 
 	checkAndCreateDatabaseTables()
+
+	startServer()
 }
 
 async function getDbConnection() {
@@ -574,6 +639,110 @@ const syncMetaDataWithGravity = async (repository: string, branches: any) => {
 	}
 }
 
+export const triggerDeployment = async (repository: string, branch: string) => {
+	let client: pg.PoolClient | null = null;
+	try {
+		client = await getDbConnection();
+
+		const githubToken = process.env.GITHUB_TOKEN!!
+
+		const octokit = new Octokit({ auth: githubToken });
+		const [owner, repo] = repository.split('/');
+
+		// Get the latest commit for the branch
+		const { data: branchData } = await octokit.repos.getBranch({
+			owner,
+			repo,
+			branch
+		});
+
+		// Get all gravity.yaml files in the repo
+		const { data: tree } = await octokit.git.getTree({
+			owner,
+			repo,
+			tree_sha: branch,
+			recursive: '1'
+		});
+
+		// Find all directories containing gravity.yaml files
+		const gravityFiles = tree.tree
+			.filter(item => item?.path?.endsWith('gravity.yaml'))
+			.map(item => path.dirname(item?.path ?? ''));
+
+		// Add root directory if it has a gravity.yaml and not already in the list
+		if (tree.tree.find(item => item?.path === 'gravity.yaml') && !gravityFiles.includes('.')) {
+			gravityFiles.push('.');
+		}
+
+		// Force all services to be marked as changed
+		const services: ServiceChange[] = [];
+		for (const servicePath of gravityFiles) {
+			try {
+				const gravityConfig = await getGravityConfigFileFromRepo(
+					owner,
+					repo,
+					githubToken,
+					servicePath
+				);
+
+				services.push({
+					servicePath,
+					hasChanges: true, // Force all services to be marked as changed
+					gravityConfig,
+					lastCommitSha: branchData.commit.sha
+				});
+			} catch (error) {
+				console.error(`Error fetching gravity config for ${servicePath}:`, error);
+			}
+		}
+
+		// get the latest action 
+
+		if (services.length === 0) {
+			throw new Error("No services with gravity.yaml found in repository");
+		}
+
+		const githubActionsStatus = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
+			headers: {
+				"Authorization": `Bearer ${githubToken}`
+			}
+		})
+
+		const completedRuns = githubActionsStatus.data.workflow_runs
+			.filter((run: DeployRun) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
+			.reduce((acc: { [key: string]: DeployRun }, run: DeployRun) => {
+				const branch = run.head_branch;
+				if (!acc[branch] || new Date(run.updated_at) > new Date(acc[branch].updated_at)) {
+					acc[branch] = run;
+				}
+				return acc;
+			}, {});
+
+		const latestDeployRun = completedRuns[branch]
+
+		// Generate deployment run ID
+		const newDeploymentRunId = v4();
+
+		// Send to agent job
+		await sendDetailsToAgentJob({
+			deploymentRunId: newDeploymentRunId,
+			services,
+			repository,
+			latestDeployRun
+		});
+
+		return {
+			deploymentRunId: newDeploymentRunId,
+			services: services.map(s => s.servicePath)
+		};
+	} catch (error) {
+		console.error(`Error triggering deployment:`, error);
+		throw error;
+	} finally {
+		client?.release();
+	}
+};
+
 const syncGitRepo = async () => {
 	let client: pg.PoolClient | null = null
 	try {
@@ -770,6 +939,8 @@ if (process.env.ENV === "development") {
 	redisClient.connect();
 	checkAndCreateDatabaseTables()
 	setInterval(syncGitRepo, 30000)
+
+	startServer()
 }
 
 // ##########################################################
@@ -1272,6 +1443,13 @@ const processJob = async () => {
 	return true
 }
 
+const shutdown = () => {
+	console.log('Shutting down server...');
+	server?.close(() => {
+		console.log('Server closed');
+	});
+};
+
 const cleanup = async () => {
 	if (deploymentRunId) {
 		console.log(`Crash. Cleaning up for deployment run id: ${deploymentRunId}`)
@@ -1284,6 +1462,8 @@ const cleanup = async () => {
 			client?.release()
 		}
 	}
+
+	shutdown()
 	process.exit(1)
 };
 
