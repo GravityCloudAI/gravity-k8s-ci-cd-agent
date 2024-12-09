@@ -708,17 +708,12 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 			}
 		})
 
-		const completedRuns = githubActionsStatus.data.workflow_runs
-			.filter((run: DeployRun) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
-			.reduce((acc: { [key: string]: DeployRun }, run: DeployRun) => {
-				const branch = run.head_branch;
-				if (!acc[branch] || new Date(run.updated_at) > new Date(acc[branch].updated_at)) {
-					acc[branch] = run;
-				}
-				return acc;
-			}, {});
-
-		const latestDeployRun = completedRuns[branch]
+		const latestDeployRun = githubActionsStatus.data.workflow_runs
+			.filter((run: DeployRun) => 
+				run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && 
+				run.status === "completed" &&
+				run.head_branch === branch
+			)[0];
 
 		// Generate deployment run ID
 		const newDeploymentRunId = v4();

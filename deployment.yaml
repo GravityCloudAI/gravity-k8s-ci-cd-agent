@@ -94,7 +94,7 @@ spec:
       labels:
         app: gravity-job-agent
     spec:
-      restartPolicy: Always
+      restartPolicy: OnFailure
       serviceAccountName: gravity-job-agent-sa
       containers:
         - name: gravity-job-agent
