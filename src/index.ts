@@ -669,8 +669,6 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 			.filter(item => item?.path?.endsWith('gravity.yaml'))
 			.map(item => path.dirname(item?.path ?? ''));
 
-		console.log(`Gravity files: ${JSON.stringify(gravityFiles)}`)
-
 		// Add root directory if it has a gravity.yaml and not already in the list
 		if (tree.tree.find(item => item?.path === 'gravity.yaml') && !gravityFiles.includes('.')) {
 			gravityFiles.push('.');
@@ -994,7 +992,7 @@ const processJob = async () => {
 					fs.mkdirSync(gitRepoPath, { recursive: true })
 
 					const cloneUrl = `https://x-access-token:${githubToken}@github.com/${repository}.git`
-					await customExec(deploymentRunId, "GIT_CLONE", serviceName, `git clone ${cloneUrl} ${gitRepoPath}`)
+					await customExec(deploymentRunId, "GIT_CLONE", serviceName, `git clone --branch ${lastRunBranch} ${cloneUrl} ${gitRepoPath}`)
 
 
 					if (service.gravityConfig?.spec?.preDeploy) {
