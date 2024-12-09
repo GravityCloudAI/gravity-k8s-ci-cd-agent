@@ -714,7 +714,7 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 				run.status === "completed" &&
 				run.head_branch === branch
 			)
-			.sort((a: DeployRun, b: DeployRun) => 
+			.sort((a: DeployRun, b: DeployRun) =>
 				new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
 			)[0];
 
@@ -1151,6 +1151,7 @@ const processJob = async () => {
 												let latestValueFileFromS3Bucket = ""
 
 												let fileName = repoDetails?.valueFile?.fileName
+												console.log(`Value file name for service ${serviceName}: ${fileName}`)
 												if (fileName) {
 													// List all objects in the bucket with the given prefix
 													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
@@ -1269,6 +1270,7 @@ const processJob = async () => {
 												let latestArgoApplicationFileFromS3Bucket = ""
 
 												let fileName = repoDetails?.argoApplicationFile?.fileName
+												console.log(`Argo file name for service ${serviceName}: ${fileName}`)
 												if (fileName) {
 													// List all objects in the bucket with the given prefix
 													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
