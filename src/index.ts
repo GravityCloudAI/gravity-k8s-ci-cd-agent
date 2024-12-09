@@ -669,6 +669,8 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 			.filter(item => item?.path?.endsWith('gravity.yaml'))
 			.map(item => path.dirname(item?.path ?? ''));
 
+		console.log(`Gravity files: ${JSON.stringify(gravityFiles)}`)
+
 		// Add root directory if it has a gravity.yaml and not already in the list
 		if (tree.tree.find(item => item?.path === 'gravity.yaml') && !gravityFiles.includes('.')) {
 			gravityFiles.push('.');
@@ -709,11 +711,16 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 		})
 
 		const latestDeployRun = githubActionsStatus.data.workflow_runs
-			.filter((run: DeployRun) => 
-				run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && 
+			.filter((run: DeployRun) =>
+				run.name === (process.env.GITHUB_JOB_NAME || "Deploy") &&
 				run.status === "completed" &&
 				run.head_branch === branch
+			)
+			.sort((a: DeployRun, b: DeployRun) => 
+				new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
 			)[0];
+
+		console.log(`Latest deploy run: ${JSON.stringify(latestDeployRun)}`)
 
 		// Generate deployment run ID
 		const newDeploymentRunId = v4();
@@ -1503,6 +1510,7 @@ if (process.env.PROCESS_JOB) {
 			services = parsedJobData.services
 			repository = parsedJobData.repository
 			latestDeployRun = parsedJobData.latestDeployRun
+			console.log(`Branch found for Process Job: ${JSON.stringify(latestDeployRun?.head_branch)}`)
 		} catch (error) {
 			console.error('Failed to parse job data:', error)
 			process.exit(1)
