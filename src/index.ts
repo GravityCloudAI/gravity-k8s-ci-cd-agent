@@ -317,6 +317,7 @@ if (process.env.GRAVITY_API_KEY) {
 const getGravityConfigFileFromRepo = async (
 	owner: string,
 	repo: string,
+	branch: string,
 	githubToken: string,
 	servicePath: string = '.'
 ): Promise<any> => {
@@ -327,7 +328,8 @@ const getGravityConfigFileFromRepo = async (
 		const { data } = await octokit.repos.getContent({
 			owner,
 			repo,
-			path: gravityPath
+			path: gravityPath,
+			ref: branch
 		})
 
 		if ('content' in data) {
@@ -406,6 +408,7 @@ const findServicesWithChanges = async (
 				const gravityConfig = await getGravityConfigFileFromRepo(
 					owner,
 					repo,
+					branch,
 					process.env.GITHUB_TOKEN!!,
 					servicePath
 				)
@@ -681,6 +684,7 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 				const gravityConfig = await getGravityConfigFileFromRepo(
 					owner,
 					repo,
+					branch,
 					githubToken,
 					servicePath
 				);
