@@ -1329,10 +1329,26 @@ const processJob = async () => {
 
 												fs.writeFileSync(localFilePath, argoApplicationFileContent)
 
-												let kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
 												if (preSignedS3Url && repoDetails?.valueFile?.presign === true) {
-													kubectlApplyCommand += ` --values ${preSignedS3Url}`
+													// Parse YAML content and update the values file URL
+													const yaml = require('yaml')
+													const argoAppYaml = yaml.parse(argoApplicationFileContent)
+													
+													// Find and replace the values file URL in the Argo application spec
+													if (argoAppYaml?.spec?.source?.helm?.valueFiles) {
+														argoAppYaml.spec.source.helm.valueFiles = argoAppYaml.spec.source.helm.valueFiles.map((value: string) => {
+															if (value.includes(latestArgoApplicationFileFromS3Bucket)) {
+																return preSignedS3Url
+															}
+															return value
+														})
+													}
+													
+													// Write the updated YAML back to file
+													fs.writeFileSync(localFilePath, yaml.stringify(argoAppYaml))
 												}
+
+												let kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
 
 												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, kubectlApplyCommand, false)
 												await client?.query("INSERT INTO argo_deployments (runId, branch, namespace, status, serviceName, valuesFile, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", serviceName, argoApplicationFileContent, new Date()])
