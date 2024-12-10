@@ -264,6 +264,7 @@ interface AWSRepository {
 		source: string
 		bucket?: string
 		fileName?: string
+		presign?: string
 	}
 	argoApplicationFile?: {
 		source: string
@@ -1074,6 +1075,9 @@ const processJob = async () => {
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 
 										let newLocalValuesFilePath: string | null = null
+
+										let preSignedS3Url = null
+
 										if (repoDetails?.valueFile?.source === "git") {
 											const valueFileName = `${serviceName}-values-${lastRunBranch}-${region}.yaml`
 
@@ -1228,6 +1232,13 @@ const processJob = async () => {
 
 													sendSlackNotification("S3 Values File Updated", `Updated ${path.basename(latestValueFileFromS3Bucket)} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
 
+													if (repoDetails?.argoApplicationFile?.source === "s3" && repoDetails?.valueFile?.presign === "true") {
+														// Generate pre-signed URL for the updated values file using AWS CLI
+														const preSignedUrlCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 presign s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} --expires-in 86400`
+														preSignedS3Url = (await customExec(deploymentRunId, "GENERATING_PRESIGNED_URL", serviceName, preSignedUrlCommand, true)).trim();
+														console.log(`Generated pre-signed URL for values file: ${preSignedS3Url}`);
+													}
+
 												} catch (error) {
 													console.error(`Failed to update values file in S3 bucket: ${error}`)
 													await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
@@ -1318,7 +1329,11 @@ const processJob = async () => {
 
 												fs.writeFileSync(localFilePath, argoApplicationFileContent)
 
-												const kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
+												let kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
+												if (preSignedS3Url && repoDetails?.valueFile?.presign === "true") {
+													kubectlApplyCommand += ` --values ${preSignedS3Url}`
+												}
+
 												await customExec(deploymentRunId, "APPLYING_ARGO_APPLICATION_FILE", serviceName, kubectlApplyCommand, false)
 												await client?.query("INSERT INTO argo_deployments (runId, branch, namespace, status, serviceName, valuesFile, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [deploymentRunId, lastRunBranch, lastRunBranch, "COMPLETED", serviceName, argoApplicationFileContent, new Date()])
 												fs.unlinkSync(localFilePath)
