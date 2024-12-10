@@ -264,7 +264,7 @@ interface AWSRepository {
 		source: string
 		bucket?: string
 		fileName?: string
-		presign?: string
+		presign?: boolean
 	}
 	argoApplicationFile?: {
 		source: string
@@ -1232,7 +1232,7 @@ const processJob = async () => {
 
 													sendSlackNotification("S3 Values File Updated", `Updated ${path.basename(latestValueFileFromS3Bucket)} for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}`)
 
-													if (repoDetails?.argoApplicationFile?.source === "s3" && repoDetails?.valueFile?.presign === "true") {
+													if (repoDetails?.argoApplicationFile?.source === "s3" && repoDetails?.valueFile?.presign === true) {
 														// Generate pre-signed URL for the updated values file using AWS CLI
 														const preSignedUrlCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 presign s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} --expires-in 86400`
 														preSignedS3Url = (await customExec(deploymentRunId, "GENERATING_PRESIGNED_URL", serviceName, preSignedUrlCommand, true)).trim();
@@ -1330,7 +1330,7 @@ const processJob = async () => {
 												fs.writeFileSync(localFilePath, argoApplicationFileContent)
 
 												let kubectlApplyCommand = `kubectl apply -f ${localFilePath}`
-												if (preSignedS3Url && repoDetails?.valueFile?.presign === "true") {
+												if (preSignedS3Url && repoDetails?.valueFile?.presign === true) {
 													kubectlApplyCommand += ` --values ${preSignedS3Url}`
 												}
 
