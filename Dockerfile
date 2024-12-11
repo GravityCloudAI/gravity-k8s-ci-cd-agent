@@ -21,8 +21,11 @@ RUN apt-get update \
 # Verify Buildah installation
 RUN echo "Buildah version: $(buildah --version)"
 
-# Install AWS CLI
-RUN pip3 install awscli --upgrade --break-system-packages
+# Install AWS CLI v2
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
+    && unzip awscliv2.zip \
+    && sudo ./aws/install \
+    && rm awscliv2.zip
 
 # Set AWS CLI pager to empty
 RUN aws configure set cli_pager ""

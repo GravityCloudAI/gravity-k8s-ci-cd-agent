@@ -1234,7 +1234,13 @@ const processJob = async () => {
 
 													if (repoDetails?.argoApplicationFile?.source === "s3" && repoDetails?.valueFile?.presign === true) {
 														// Generate pre-signed URL for the updated values file using AWS CLI
-														const preSignedUrlCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 presign s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} --expires-in 86400`
+
+														// get the first part from the bucket name and find region for that
+														const getBucketRegionCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api get-bucket-location --bucket ${s3BucketName}`
+														const bucketRegionResponse = await customExec(deploymentRunId, "GETTING_BUCKET_REGION", serviceName, getBucketRegionCommand, true);
+														const bucketRegion = JSON.parse(bucketRegionResponse).LocationConstraint || 'us-east-1';
+														
+														const preSignedUrlCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 presign s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} --expires-in 86400 --region ${bucketRegion}`
 														preSignedS3Url = (await customExec(deploymentRunId, "GENERATING_PRESIGNED_URL", serviceName, preSignedUrlCommand, true)).trim();
 														console.log(`Generated pre-signed URL for values file: ${preSignedS3Url}`);
 													}
