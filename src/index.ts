@@ -1016,7 +1016,7 @@ const processJob = async () => {
 
 					const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
-					// await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
+					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
@@ -1066,12 +1066,12 @@ const processJob = async () => {
 
 										// tag the docker image with the aws repository name and region
 										const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										// await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", serviceName, dockerTagCommand)
+										await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", serviceName, dockerTagCommand)
 
 										const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										// await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
+										await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
 
-										// await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
+										await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
 
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 
