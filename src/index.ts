@@ -943,8 +943,8 @@ if (process.env.ENV === "development") {
 	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
 	redisClient.connect();
 	checkAndCreateDatabaseTables()
-	setInterval(syncGitRepo, 30000)
-
+	// setInterval(syncGitRepo, 30000)
+	syncGitRepo()
 	startServer()
 }
 
@@ -1016,7 +1016,7 @@ const processJob = async () => {
 
 					const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 
-					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
+					// await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
@@ -1026,6 +1026,7 @@ const processJob = async () => {
 					if (service.gravityConfig?.spec?.aws) {
 						// push the docker image for each aws repository
 						await Promise.all(service.gravityConfig?.spec?.aws?.repository?.map(async (repoDetails: AWSRepository) => {
+
 							try {
 								const awsRepositoryName = repoDetails?.name
 								const awsRepositoryRegions = repoDetails?.regions
@@ -1065,12 +1066,12 @@ const processJob = async () => {
 
 										// tag the docker image with the aws repository name and region
 										const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", serviceName, dockerTagCommand)
+										// await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", serviceName, dockerTagCommand)
 
 										const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
+										// await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
 
-										await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
+										// await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
 
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 
@@ -1159,7 +1160,6 @@ const processJob = async () => {
 												let latestValueFileFromS3Bucket = ""
 
 												let fileName = repoDetails?.valueFile?.fileName
-												console.log(`Value file name for service ${serviceName}: ${fileName}`)
 												if (fileName) {
 													// List all objects in the bucket with the given prefix
 													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
@@ -1285,7 +1285,6 @@ const processJob = async () => {
 												let latestArgoApplicationFileFromS3Bucket = ""
 
 												let fileName = repoDetails?.argoApplicationFile?.fileName
-												console.log(`Argo file name for service ${serviceName}: ${fileName}`)
 												if (fileName) {
 													// List all objects in the bucket with the given prefix
 													const listCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api list-objects-v2 --bucket ${s3BucketName} ${s3Prefix ? `--prefix "${s3Prefix}/" --delimiter "/"` : '--delimiter "/"'} --output json`
@@ -1331,19 +1330,13 @@ const processJob = async () => {
 
 												if (preSignedS3Url && repoDetails?.valueFile?.presign === true) {
 													// Parse YAML content and update the values file URL
-													const yaml = require('yaml')
 													const argoAppYaml = yaml.parse(argoApplicationFileContent)
-													
+
 													// Find and replace the values file URL in the Argo application spec
 													if (argoAppYaml?.spec?.source?.helm?.valueFiles) {
-														argoAppYaml.spec.source.helm.valueFiles = argoAppYaml.spec.source.helm.valueFiles.map((value: string) => {
-															if (value.includes(latestArgoApplicationFileFromS3Bucket)) {
-																return preSignedS3Url
-															}
-															return value
-														})
+														argoAppYaml.spec.source.helm.valueFiles = [preSignedS3Url]
 													}
-													
+
 													// Write the updated YAML back to file
 													fs.writeFileSync(localFilePath, yaml.stringify(argoAppYaml))
 												}
