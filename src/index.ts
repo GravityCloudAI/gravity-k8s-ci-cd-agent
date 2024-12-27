@@ -582,7 +582,7 @@ spec:
       serviceAccountName: gravity-job-agent-sa
       containers:
         - name: gravity-job-agent-${details.deploymentRunId}-${random4Char}
-          image: gravitycloud/gravity-ci-cd-agent:latest
+          image: gravitycloud/gravity-ci-cd-agent:${process.env.ENV === "production" ? "latest" : "dev"}
           imagePullPolicy: Always
           securityContext:
             privileged: true
