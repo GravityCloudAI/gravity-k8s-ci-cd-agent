@@ -560,6 +560,115 @@ const customExec = (runId: string, action: string, serviceName: string, command:
 }
 
 const sendDetailsToAgentJob = async (details: any) => {
+	// get namespace for this pod from /var/run/secrets/kubernetes.io/serviceaccount/namespace
+	const NAMESPACE = process.env.NAMESPACE || "gravity"
+
+	// create a new k8s job with the below template
+
+	const random4Char = Math.random().toString(36).substring(2, 6)
+
+	const jobTemplate = `apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gravity-job-agent-${details.deploymentRunId}-${random4Char}
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    metadata:
+      labels:
+        app: gravity-job-agent
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: gravity-job-agent-sa
+      containers:
+        - name: gravity-job-agent-${details.deploymentRunId}-${random4Char}
+          image: gravitycloud/gravity-ci-cd-agent:${process.env.ENV === "production" ? "latest" : "dev"}
+          imagePullPolicy: Always
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+          volumeMounts:
+            - name: buildah-storage
+              mountPath: /var/lib/containers
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: true
+          env:
+            - name: GRAVITY_API_KEY
+              value: "${process.env.GRAVITY_API_KEY}"
+            - name: GRAVITY_WEBSOCKET_URL
+              value: "${process.env.GRAVITY_WEBSOCKET_URL}"
+            - name: GRAVITY_API_URL
+              value: "${process.env.GRAVITY_API_URL}"
+            - name: PROCESS_JOB
+              value: "true"
+            - name: ENV
+              value: "${process.env.ENV}"
+            - name: GITHUB_TOKEN
+              value: "${process.env.GITHUB_TOKEN}"
+            - name: GITHUB_REPOSITORIES
+              value: "${process.env.GITHUB_REPOSITORIES}"
+            - name: GIT_BRANCHES_ALLOWED
+              value: "${process.env.GIT_BRANCHES_ALLOWED}"
+            - name: GITHUB_JOB_NAME
+              value: "${process.env.GITHUB_JOB_NAME}"
+            - name: AWS_ACCESS_KEY_ID
+              value: "${process.env.AWS_ACCESS_KEY_ID}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "${process.env.AWS_SECRET_ACCESS_KEY}"
+            - name: AWS_ACCOUNT_ID
+              value: "${process.env.AWS_ACCOUNT_ID}"
+            - name: POSTGRES_HOST
+              value: "${process.env.POSTGRES_HOST}"
+            - name: POSTGRES_USER
+              value: "${process.env.POSTGRES_USER}"
+            - name: POSTGRES_PASSWORD
+              value: "${process.env.POSTGRES_PASSWORD}"
+            - name: POSTGRES_DB
+              value: "${process.env.POSTGRES_DB}"
+            - name: POSTGRES_PORT
+              value: "${process.env.POSTGRES_PORT}"
+            - name: REDIS_HOST
+              value: "${process.env.REDIS_HOST}"
+            - name: REDIS_PORT
+              value: "${process.env.REDIS_PORT}"
+            - name: REDIS_PASSWORD
+              value: "${process.env.REDIS_PASSWORD}"
+            - name: SLACK_WEBHOOK_URL
+              value: "${process.env.SLACK_WEBHOOK_URL}"
+            - name: ARGOCD_URL
+              value: "${process.env.ARGOCD_URL}"
+            - name: ARGOCD_TOKEN
+              value: "${process.env.ARGOCD_TOKEN}"
+            - name: DEPLOYMENT_RUN_ID
+              value: "${details.deploymentRunId}"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "512m"
+            limits:
+              memory: "4096Mi"
+              cpu: "4000m"
+      volumes:
+        - name: buildah-storage
+          persistentVolumeClaim:
+            claimName: agent-gravity-pvc
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory`
+
+	const tempFile = path.join(os.tmpdir(), `job-${details.deploymentRunId}-${random4Char}.yaml`)
+	fs.writeFileSync(tempFile, jobTemplate)
+
+	try {
+		await customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
+	} finally {
+		// Clean up the temporary file
+		fs.unlinkSync(tempFile)
+	}
 	redisClient.publish("agent-job", Buffer.from(JSON.stringify(details)).toString('base64'))
 }
 
@@ -951,7 +1060,6 @@ if (process.env.ENV === "development") {
 // ##########################################################
 // Below is the agent job code that runs the CI/CD pipeline, this gets deployed with PROCESS_JOB ENV to indicate that the agent job should be run
 
-
 let deploymentRunId: any
 let services: any
 let repository: any
@@ -1239,7 +1347,7 @@ const processJob = async () => {
 														const getBucketRegionCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3api get-bucket-location --bucket ${s3BucketName}`
 														const bucketRegionResponse = await customExec(deploymentRunId, "GETTING_BUCKET_REGION", serviceName, getBucketRegionCommand, true);
 														const bucketRegion = JSON.parse(bucketRegionResponse).LocationConstraint || 'us-east-1';
-														
+
 														const preSignedUrlCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws s3 presign s3://${s3BucketName}/${s3Prefix ? `${s3Prefix}/` : ''}${path.basename(latestValueFileFromS3Bucket)} --expires-in 86400 --region ${bucketRegion}`
 														preSignedS3Url = (await customExec(deploymentRunId, "GENERATING_PRESIGNED_URL", serviceName, preSignedUrlCommand, true)).trim();
 														console.log(`Generated pre-signed URL for values file: ${preSignedS3Url}`);
@@ -1524,7 +1632,6 @@ process.on('unhandledRejection', async (reason, promise) => {
 });
 
 // listen for messages on the agent-job channel
-console.log("process.env.PROCESS_JOB: ", process.env.PROCESS_JOB)
 if (process.env.PROCESS_JOB) {
 
 	const subscriberClient = redis.createClient({
@@ -1536,20 +1643,34 @@ if (process.env.PROCESS_JOB) {
 	subscriberClient.connect()
 
 	await subscriberClient.subscribe('agent-job', async (message) => {
-		// console.log(`Received message on channel agent-job: ${message}`)
-
 		try {
 			const parsedJobData = JSON.parse(Buffer.from(message, 'base64').toString())
 			deploymentRunId = parsedJobData.deploymentRunId
-			services = parsedJobData.services
-			repository = parsedJobData.repository
-			latestDeployRun = parsedJobData.latestDeployRun
-			console.log(`Branch found for Process Job: ${JSON.stringify(latestDeployRun?.head_branch)}`)
+
+			if (deploymentRunId && process.env.DEPLOYMENT_RUN_ID) {
+				if (deploymentRunId !== process.env.DEPLOYMENT_RUN_ID) {
+					console.log(`Deployment run id mismatch. Expected: ${process.env.DEPLOYMENT_RUN_ID}, Received: ${deploymentRunId}`)
+					// ensure the redis message is still part of the queue so another pod can pick it up
+					// create a new redis client and publish the message
+					const newSubscriberClient = redis.createClient({
+						url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
+					})
+					await newSubscriberClient.publish('agent-job', message)
+					newSubscriberClient.quit()
+				} else {
+					services = parsedJobData.services
+					repository = parsedJobData.repository
+					latestDeployRun = parsedJobData.latestDeployRun
+					console.log(`Branch found for Process Job: ${JSON.stringify(latestDeployRun?.head_branch)}`)
+					await processJob()
+				}
+			}
+
 		} catch (error) {
 			console.error('Failed to parse job data:', error)
 			process.exit(1)
+		} finally {
+			subscriberClient.quit()
 		}
-
-		await processJob()
 	})
 }
