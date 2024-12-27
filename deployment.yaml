@@ -14,6 +14,7 @@ spec:
         app: gravity-ci-cd-agent
     spec:
       restartPolicy: Always
+      serviceAccountName: gravity-job-agent-sa
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.28
@@ -41,6 +42,8 @@ spec:
               value: "${GRAVITY_API_KEY}"
             - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
               value: "${GRAVITY_WEBSOCKET_URL}"
+            - name: GRAVITY_API_URL
+              value: "${GRAVITY_API_URL}"
             - name: ENV
               value: "${ENV}"
             - name: GITHUB_TOKEN
@@ -270,13 +273,16 @@ rules:
   resources: ["secrets"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["apps"]
   resources: ["deployments", "statefulsets", "replicasets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["batch"]
-  resources: ["jobs"]
+  resources: ["jobs", "jobs/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingresses", "networkpolicies"]
@@ -289,6 +295,9 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: v1
