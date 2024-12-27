@@ -75,6 +75,12 @@ spec:
               value: "${REDIS_PASSWORD}"
             - name: SLACK_WEBHOOK_URL
               value: "${SLACK_WEBHOOK_URL}"
+            - name: ARGOCD_URL
+              value: "${ARGOCD_URL}"
+            - name: ARGOCD_TOKEN
+              value: "${ARGOCD_TOKEN}"
+            - name: NAMESPACE
+              value: "${NAMESPACE}"
           resources:
             requests:
               memory: "512Mi"
@@ -82,97 +88,6 @@ spec:
             limits:
               memory: "8192Mi"
               cpu: "4000m"
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: gravity-job-agent
-  namespace: ${NAMESPACE}
-spec:
-  template:
-    metadata:
-      labels:
-        app: gravity-job-agent
-    spec:
-      restartPolicy: OnFailure
-      serviceAccountName: gravity-job-agent-sa
-      containers:
-        - name: gravity-job-agent
-          image: gravitycloud/gravity-ci-cd-agent:latest
-          imagePullPolicy: Always
-          securityContext:
-            privileged: true
-            capabilities:
-              add:
-                - SYS_ADMIN
-          volumeMounts:
-            - name: buildah-storage
-              mountPath: /var/lib/containers
-            - name: cgroup
-              mountPath: /sys/fs/cgroup
-              readOnly: true
-          env:
-            - name: GRAVITY_API_KEY # OPTIONAL: To sync logs, errors, and reports with Gravity UI
-              value: "${GRAVITY_API_KEY}"
-            - name: GRAVITY_WEBSOCKET_URL # OPTIONAL: To sync logs, errors, and reports with Gravity UI
-              value: "${GRAVITY_WEBSOCKET_URL}"
-            - name: GRAVITY_API_URL
-              value: "${GRAVITY_API_URL}"
-            - name: PROCESS_JOB
-              value: "true"
-            - name: ENV
-              value: "${ENV}"
-            - name: GITHUB_TOKEN
-              value: "${GITHUB_TOKEN}"
-            - name: GITHUB_REPOSITORIES
-              value: "${GITHUB_REPOSITORIES}"
-            - name: GIT_BRANCHES_ALLOWED
-              value: "${GIT_BRANCHES_ALLOWED}"
-            - name: GITHUB_JOB_NAME
-              value: "${GITHUB_JOB_NAME}"
-            - name: AWS_ACCESS_KEY_ID
-              value: "${AWS_ACCESS_KEY_ID}"
-            - name: AWS_SECRET_ACCESS_KEY
-              value: "${AWS_SECRET_ACCESS_KEY}"
-            - name: AWS_ACCOUNT_ID
-              value: "${AWS_ACCOUNT_ID}"
-            - name: POSTGRES_HOST
-              value: "${POSTGRES_HOST}"
-            - name: POSTGRES_USER
-              value: "${POSTGRES_USER}"
-            - name: POSTGRES_PASSWORD
-              value: "${POSTGRES_PASSWORD}"
-            - name: POSTGRES_DB
-              value: "${POSTGRES_DB}"
-            - name: POSTGRES_PORT
-              value: "${POSTGRES_PORT}"
-            - name: REDIS_HOST
-              value: "${REDIS_HOST}"
-            - name: REDIS_PORT
-              value: "${REDIS_PORT}"
-            - name: REDIS_PASSWORD
-              value: "${REDIS_PASSWORD}"
-            - name: SLACK_WEBHOOK_URL
-              value: "${SLACK_WEBHOOK_URL}"
-            - name: ARGOCD_URL
-              value: "${ARGOCD_URL}"
-            - name: ARGOCD_TOKEN
-              value: "${ARGOCD_TOKEN}"
-          resources:
-            requests:
-              memory: "512Mi"
-              cpu: "512m"
-            limits:
-              memory: "4096Mi"
-              cpu: "4000m"
-      volumes:
-        - name: buildah-storage
-          persistentVolumeClaim:
-            claimName: agent-gravity-pvc
-        - name: cgroup
-          hostPath:
-            path: /sys/fs/cgroup
-            type: Directory
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -375,3 +290,53 @@ rules:
 - apiGroups: ["argoproj.io"]
   resources: ["applications"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gravity-docker-registry
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: gravity-docker-registry
+  ports:
+    - port: 5000
+      targetPort: 5000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gravity-docker-registry
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    matchLabels:
+      app: gravity-docker-registry
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: gravity-docker-registry
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: gravity-docker-cache
+              mountPath: /var/lib/registry
+          env:
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "512m"
+            limits:
+              memory: "4096Mi"
+              cpu: "4000m"
+      volumes:
+        - name: gravity-docker-cache
+          persistentVolumeClaim:
+            claimName: agent-gravity-pvc
