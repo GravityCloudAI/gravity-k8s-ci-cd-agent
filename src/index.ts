@@ -1151,7 +1151,7 @@ const processJob = async () => {
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
 					const dockerBuildCommand = process.env.ENV === "production" 
-					? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --cache-from ${localRegistryUrl}/cache --cache-to ${localRegistryUrl}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+					? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --layers --cache-from ${localRegistryUrl}/${owner}/cache --cache-to ${localRegistryUrl}/${owner}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 					: `${dockerBuildCli} build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
