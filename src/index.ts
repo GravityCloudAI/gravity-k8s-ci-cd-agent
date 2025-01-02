@@ -669,11 +669,38 @@ spec:
 
 	try {
 		// customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
-		console.log(`[APP] Publishing message to Redis channel: agent-job`)
-		redisClient.publish("agent-job", Buffer.from(JSON.stringify(details)).toString('base64'))
 	} finally {
 		// Clean up the temporary file
 		fs.unlinkSync(tempFile)
+	}
+
+	try {
+
+		const streamKey = 'agent-job-stream'
+		const consumerGroup = 'agent-job-processors'
+		try {
+			await redisClient.xGroupCreate(streamKey, consumerGroup, '0', {
+				MKSTREAM: true
+			})
+		} catch (err: any) {
+			if (!err.message.includes('BUSYGROUP')) {
+				throw err
+			}
+		}
+
+		await redisClient.xAdd(streamKey, '*', {
+			'data': Buffer.from(JSON.stringify(details)).toString('base64'),
+			'runId': details.deploymentRunId
+		})
+
+		console.log(`[APP] Published message to Redis stream for runId: ${details.deploymentRunId}`)
+		if (process.env.ENV !== "production") {
+			// set env var DEPLOYMENT_RUN_ID 
+			process.env.DEPLOYMENT_RUN_ID = details.deploymentRunId
+		}
+	} catch (error) {
+		console.error('Error publishing to Redis stream:', error)
+		throw error
 	}
 }
 
@@ -1648,47 +1675,103 @@ process.on('unhandledRejection', async (reason, promise) => {
 	await cleanup();
 });
 
-// listen for messages on the agent-job channel
+// listen for messages in the redis stream
 if (process.env.PROCESS_JOB) {
-
 	const subscriberClient = redis.createClient({
 		url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
 	})
 
-	subscriberClient.on('error', (err: any) => console.error('Subscriber error:', err));
-	subscriberClient.on('ready', () => console.info(`[APP] Subscriber connected to Redis. Listening for messages on channel: agent-job`));
-	subscriberClient.connect()
+	subscriberClient.on('error', (err: any) => console.error('Subscriber error:', err))
+	subscriberClient.on('ready', () => console.info(`[APP] Subscriber connected to Redis`))
+	await subscriberClient.connect()
 
-	await subscriberClient.subscribe('agent-job', async (message) => {
+	const streamKey = 'agent-job-stream'
+	const consumerGroup = 'agent-job-processors'
+	const consumer = `consumer-${process.env.DEPLOYMENT_RUN_ID}`
+
+	const processMessages = async () => {
+		console.log(`[APP] Processing messages for runId: ${process.env.DEPLOYMENT_RUN_ID}`)
 		try {
-			const parsedJobData = JSON.parse(Buffer.from(message, 'base64').toString())
-			console.log(`[APP] Received message: ${JSON.stringify(parsedJobData)}`)
-			deploymentRunId = parsedJobData.deploymentRunId
-
-			if (deploymentRunId && process.env.DEPLOYMENT_RUN_ID) {
-				if (deploymentRunId !== process.env.DEPLOYMENT_RUN_ID) {
-					console.log(`Deployment run id mismatch. Expected: ${process.env.DEPLOYMENT_RUN_ID}, Received: ${deploymentRunId}`)
-					// ensure the redis message is still part of the queue so another pod can pick it up
-					// create a new redis client and publish the message
-					const newSubscriberClient = redis.createClient({
-						url: `redis://:${process.env.REDIS_PASSWORD}@${process.env.REDIS_HOST}:${process.env.REDIS_PORT}`
-					})
-					await newSubscriberClient.publish('agent-job', message)
-					newSubscriberClient.quit()
-				} else {
-					services = parsedJobData.services
-					repository = parsedJobData.repository
-					latestDeployRun = parsedJobData.latestDeployRun
-					console.log(`Branch found for Process Job: ${JSON.stringify(latestDeployRun?.head_branch)}`)
-					await processJob()
+			// First try to find our specific message in pending messages
+			const pendingMessage = await subscriberClient.xReadGroup(
+				consumerGroup,
+				consumer,
+				[
+					{
+						key: streamKey,
+						id: '0'
+					}
+				],
+				{
+					COUNT: 1
 				}
+			);
+
+			if (pendingMessage && pendingMessage[0]?.messages[0]) {
+				const message = pendingMessage[0].messages[0];
+				const { data, runId } = message.message;
+
+				if (runId === process.env.DEPLOYMENT_RUN_ID) {
+					const parsedJobData = JSON.parse(Buffer.from(data, 'base64').toString());
+					console.log(`[APP] Processing pending message for runId: ${runId}`);
+
+					deploymentRunId = parsedJobData.deploymentRunId;
+					services = parsedJobData.services;
+					repository = parsedJobData.repository;
+					latestDeployRun = parsedJobData.latestDeployRun;
+
+					await processJob();
+					await subscriberClient.xAck(streamKey, consumerGroup, message.id);
+					return;
+				}
+				// If not our message, acknowledge and continue to new messages
+				await subscriberClient.xAck(streamKey, consumerGroup, message.id);
 			}
 
+			// If we didn't find our message in pending, wait for new messages
+			while (true) {
+				const messages = await subscriberClient.xReadGroup(
+					consumerGroup,
+					consumer,
+					[
+						{
+							key: streamKey,
+							id: '>'
+						}
+					],
+					{
+						COUNT: 1,
+						BLOCK: 5000
+					}
+				);
+
+				if (!messages || messages.length === 0) continue;
+
+				const message = messages[0].messages[0];
+				const { data, runId } = message.message;
+
+				if (runId === process.env.DEPLOYMENT_RUN_ID) {
+					const parsedJobData = JSON.parse(Buffer.from(data, 'base64').toString());
+					console.log(`[APP] Processing message for runId: ${runId}`);
+
+					deploymentRunId = parsedJobData.deploymentRunId;
+					services = parsedJobData.services;
+					repository = parsedJobData.repository;
+					latestDeployRun = parsedJobData.latestDeployRun;
+
+					await processJob();
+					await subscriberClient.xAck(streamKey, consumerGroup, message.id);
+					return;
+				}
+				// If not our message, acknowledge and continue
+				await subscriberClient.xAck(streamKey, consumerGroup, message.id);
+			}
 		} catch (error) {
-			console.error('Failed to parse job data:', error)
-			process.exit(1)
-		} finally {
-			subscriberClient.quit()
+			console.error('Error processing message:', error);
+			throw error;
 		}
-	})
+	}
+
+	// Start processing messages
+	processMessages().catch(console.error)
 }
