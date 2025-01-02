@@ -668,7 +668,7 @@ spec:
 	fs.writeFileSync(tempFile, jobTemplate)
 
 	try {
-		// customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
+		customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
 	} finally {
 		// Clean up the temporary file
 		fs.unlinkSync(tempFile)
@@ -1722,31 +1722,30 @@ if (process.env.PROCESS_JOB) {
 
 					await processJob();
 					await subscriberClient.xAck(streamKey, consumerGroup, message.id);
+					await subscriberClient.disconnect();
+					process.exit(0); // Exit successfully after job completion
 					return;
 				}
-				// If not our message, acknowledge and continue to new messages
 				await subscriberClient.xAck(streamKey, consumerGroup, message.id);
 			}
 
 			// If we didn't find our message in pending, wait for new messages
-			while (true) {
-				const messages = await subscriberClient.xReadGroup(
-					consumerGroup,
-					consumer,
-					[
-						{
-							key: streamKey,
-							id: '>'
-						}
-					],
+			const messages = await subscriberClient.xReadGroup(
+				consumerGroup,
+				consumer,
+				[
 					{
-						COUNT: 1,
-						BLOCK: 5000
+						key: streamKey,
+						id: '>'
 					}
-				);
+				],
+				{
+					COUNT: 1,
+					BLOCK: 5000
+				}
+			);
 
-				if (!messages || messages.length === 0) continue;
-
+			if (messages && messages[0]?.messages[0]) {
 				const message = messages[0].messages[0];
 				const { data, runId } = message.message;
 
@@ -1761,14 +1760,22 @@ if (process.env.PROCESS_JOB) {
 
 					await processJob();
 					await subscriberClient.xAck(streamKey, consumerGroup, message.id);
+					await subscriberClient.disconnect();
+					process.exit(0); // Exit successfully after job completion
 					return;
 				}
-				// If not our message, acknowledge and continue
 				await subscriberClient.xAck(streamKey, consumerGroup, message.id);
 			}
+
+			// If we didn't find our message at all, exit with an error
+			console.log('No matching message found for this job');
+			await subscriberClient.disconnect();
+			process.exit(1);
+
 		} catch (error) {
 			console.error('Error processing message:', error);
-			throw error;
+			await subscriberClient.disconnect();
+			process.exit(1); // Exit with error
 		}
 	}
 
