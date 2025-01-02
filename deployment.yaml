@@ -84,6 +84,10 @@ spec:
               value: "${ARGOCD_TOKEN}"
             - name: NAMESPACE
               value: "${NAMESPACE}"
+            - name: DOCKER_REGISTRY_URL
+              value: "${DOCKER_REGISTRY_URL}"
+            - name: DOCKER_REGISTRY_PORT
+              value: "${DOCKER_REGISTRY_PORT}"
           resources:
             requests:
               memory: "512Mi"
