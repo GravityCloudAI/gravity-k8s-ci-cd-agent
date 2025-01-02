@@ -668,12 +668,13 @@ spec:
 	fs.writeFileSync(tempFile, jobTemplate)
 
 	try {
-		await customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
+		// customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
+		console.log(`[APP] Publishing message to Redis channel: agent-job`)
+		redisClient.publish("agent-job", Buffer.from(JSON.stringify(details)).toString('base64'))
 	} finally {
 		// Clean up the temporary file
 		fs.unlinkSync(tempFile)
 	}
-	redisClient.publish("agent-job", Buffer.from(JSON.stringify(details)).toString('base64'))
 }
 
 const processBranchDeletions = async (branches: any) => {
@@ -1595,6 +1596,8 @@ const processJob = async () => {
 			client?.release()
 			return true
 		}
+	} else {
+		console.log(`[APP] No deployment run id found. Skipping job processing`)
 	}
 
 	deploymentRunId = undefined
@@ -1653,12 +1656,13 @@ if (process.env.PROCESS_JOB) {
 	})
 
 	subscriberClient.on('error', (err: any) => console.error('Subscriber error:', err));
-	subscriberClient.on('ready', () => console.info(`[APP] Subscriber connected to Redis`));
+	subscriberClient.on('ready', () => console.info(`[APP] Subscriber connected to Redis. Listening for messages on channel: agent-job`));
 	subscriberClient.connect()
 
 	await subscriberClient.subscribe('agent-job', async (message) => {
 		try {
 			const parsedJobData = JSON.parse(Buffer.from(message, 'base64').toString())
+			console.log(`[APP] Received message: ${JSON.stringify(parsedJobData)}`)
 			deploymentRunId = parsedJobData.deploymentRunId
 
 			if (deploymentRunId && process.env.DEPLOYMENT_RUN_ID) {
