@@ -560,11 +560,7 @@ const customExec = (runId: string, action: string, serviceName: string, command:
 }
 
 const sendDetailsToAgentJob = async (details: any) => {
-	// get namespace for this pod from /var/run/secrets/kubernetes.io/serviceaccount/namespace
 	const NAMESPACE = process.env.NAMESPACE || "gravity"
-
-	// create a new k8s job with the below template
-
 	const random4Char = Math.random().toString(36).substring(2, 6)
 
 	const jobTemplate = `apiVersion: batch/v1
@@ -668,9 +664,8 @@ spec:
 	fs.writeFileSync(tempFile, jobTemplate)
 
 	try {
-		customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
+		await customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
 	} finally {
-		// Clean up the temporary file
 		fs.unlinkSync(tempFile)
 	}
 
@@ -695,7 +690,6 @@ spec:
 
 		console.log(`[APP] Published message to Redis stream for runId: ${details.deploymentRunId}`)
 		if (process.env.ENV !== "production") {
-			// set env var DEPLOYMENT_RUN_ID 
 			process.env.DEPLOYMENT_RUN_ID = details.deploymentRunId
 		}
 	} catch (error) {
@@ -1722,30 +1716,31 @@ if (process.env.PROCESS_JOB) {
 
 					await processJob();
 					await subscriberClient.xAck(streamKey, consumerGroup, message.id);
-					await subscriberClient.disconnect();
-					process.exit(0); // Exit successfully after job completion
 					return;
 				}
+				// If not our message, acknowledge and continue to new messages
 				await subscriberClient.xAck(streamKey, consumerGroup, message.id);
 			}
 
 			// If we didn't find our message in pending, wait for new messages
-			const messages = await subscriberClient.xReadGroup(
-				consumerGroup,
-				consumer,
-				[
+			while (true) {
+				const messages = await subscriberClient.xReadGroup(
+					consumerGroup,
+					consumer,
+					[
+						{
+							key: streamKey,
+							id: '>'
+						}
+					],
 					{
-						key: streamKey,
-						id: '>'
+						COUNT: 1,
+						BLOCK: 5000
 					}
-				],
-				{
-					COUNT: 1,
-					BLOCK: 5000
-				}
-			);
+				);
 
-			if (messages && messages[0]?.messages[0]) {
+				if (!messages || messages.length === 0) continue;
+
 				const message = messages[0].messages[0];
 				const { data, runId } = message.message;
 
@@ -1760,22 +1755,14 @@ if (process.env.PROCESS_JOB) {
 
 					await processJob();
 					await subscriberClient.xAck(streamKey, consumerGroup, message.id);
-					await subscriberClient.disconnect();
-					process.exit(0); // Exit successfully after job completion
 					return;
 				}
+				// If not our message, acknowledge and continue
 				await subscriberClient.xAck(streamKey, consumerGroup, message.id);
 			}
-
-			// If we didn't find our message at all, exit with an error
-			console.log('No matching message found for this job');
-			await subscriberClient.disconnect();
-			process.exit(1);
-
 		} catch (error) {
 			console.error('Error processing message:', error);
-			await subscriberClient.disconnect();
-			process.exit(1); // Exit with error
+			throw error;
 		}
 	}
 
