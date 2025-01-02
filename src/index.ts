@@ -1151,8 +1151,8 @@ const processJob = async () => {
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
 					const dockerBuildCommand = process.env.ENV === "production" 
-					? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --cache-from ${owner}/${serviceName}/cache --cache-to ${owner}/${serviceName}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
-					: `${dockerBuildCli} build --platform=linux/amd64 --cache-from ${localRegistryUrl}/${owner}/${serviceName}:latest -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
+					? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --cache-from ${localRegistryUrl}/cache --cache-to ${localRegistryUrl}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+					: `${dockerBuildCli} build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
 				
 					if (process.env.ENV === "production") {
 						dockerBuildCli += " --tls-verify=false"
