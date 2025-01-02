@@ -1153,10 +1153,6 @@ const processJob = async () => {
 					const dockerBuildCommand = process.env.ENV === "production" 
 					? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --cache-from ${localRegistryUrl}/cache --cache-to ${localRegistryUrl}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
 					: `${dockerBuildCli} build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
-				
-					if (process.env.ENV === "production") {
-						dockerBuildCli += " --tls-verify=false"
-					}
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
