@@ -1609,14 +1609,15 @@ const processJob = async () => {
 			throw error
 		} finally {
 			client?.release()
-			return true
+			process.exit(0)
 		}
 	} else {
 		console.log(`[APP] No deployment run id found. Skipping job processing`)
 	}
 
 	deploymentRunId = undefined
-	return true
+	
+	process.exit(0)
 }
 
 const shutdown = () => {
@@ -1718,6 +1719,7 @@ if (process.env.PROCESS_JOB) {
 
 			// If we didn't find our message in pending, wait for new messages
 			while (true) {
+				console.log(`[APP] Waiting for new messages for runId: ${process.env.DEPLOYMENT_RUN_ID}`)
 				const messages = await subscriberClient.xReadGroup(
 					consumerGroup,
 					consumer,
@@ -1737,6 +1739,8 @@ if (process.env.PROCESS_JOB) {
 
 				const message = messages[0].messages[0];
 				const { data, runId } = message.message;
+
+				console.log(`[APP] Checking message for runId: ${runId}`)
 
 				if (runId === process.env.DEPLOYMENT_RUN_ID) {
 					const parsedJobData = JSON.parse(Buffer.from(data, 'base64').toString());
