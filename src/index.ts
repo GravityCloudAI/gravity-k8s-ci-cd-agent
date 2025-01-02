@@ -642,6 +642,10 @@ spec:
               value: "${process.env.ARGOCD_URL}"
             - name: ARGOCD_TOKEN
               value: "${process.env.ARGOCD_TOKEN}"
+            - name: DOCKER_REGISTRY_URL
+              value: "${process.env.DOCKER_REGISTRY_URL}"
+            - name: DOCKER_REGISTRY_PORT
+              value: "${process.env.DOCKER_REGISTRY_PORT}"  			  		
             - name: DEPLOYMENT_RUN_ID
               value: "${details.deploymentRunId}"
           resources:

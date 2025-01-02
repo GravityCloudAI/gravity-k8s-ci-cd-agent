@@ -22,7 +22,14 @@ spec:
             [
               "sh",
               "-c",
-              "until nc -z $POSTGRES_HOST ${POSTGRES_PORT} && nc -z $REDIS_HOST ${REDIS_PORT}; do echo waiting for postgres and redis; if ! nc -z $POSTGRES_HOST ${POSTGRES_PORT:-5432}; then echo postgres not ready; fi; if ! nc -z $REDIS_HOST ${REDIS_PORT:-6379}; then echo redis not ready; fi; sleep 2; done;",
+              "echo 'Waiting for services...' && \
+              while ! nc -z -w 2 $POSTGRES_HOST ${POSTGRES_PORT:-5432} || ! nc -z -w 2 $REDIS_HOST ${REDIS_PORT:-6379}; do \
+                echo 'Checking services:'; \
+                nc -z -w 2 $POSTGRES_HOST ${POSTGRES_PORT:-5432} || echo '- Postgres not ready'; \
+                nc -z -w 2 $REDIS_HOST ${REDIS_PORT:-6379} || echo '- Redis not ready'; \
+                sleep 5; \
+              done; \
+              echo 'All services are ready!'"
             ]
           env:
             - name: POSTGRES_HOST
