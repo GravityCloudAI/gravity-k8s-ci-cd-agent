@@ -1150,19 +1150,17 @@ const processJob = async () => {
 					const serviceContext = path.join(gitRepoPath, service.servicePath)
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
-					const dockerBuildCommand = `${dockerBuildCli} ${process.env.ENV === "production" ? "bud --isolation chroot" : "build"} --platform=linux/amd64 --cache-from ${localRegistryUrl}/${owner}/${serviceName}:latest -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
-
-					try {
-						await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `${dockerBuildCli} pull ${localRegistryUrl}/${owner}/${serviceName}:latest`)
-					} catch (error) {
-						console.log(`No existing image found in local registry for ${serviceName}, building without cache`)
+					const dockerBuildCommand = process.env.ENV === "production" 
+					? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --cache-from ${owner}/${serviceName}/cache --cache-to ${owner}/${serviceName}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+					: `${dockerBuildCli} build --platform=linux/amd64 --cache-from ${localRegistryUrl}/${owner}/${serviceName}:latest -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
+				
+					if (process.env.ENV === "production") {
+						dockerBuildCli += " --tls-verify=false"
 					}
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
 
 					sendSlackNotification("Docker Build Completed", `Docker build completed for ${serviceName} / ${lastRunBranch} in ${repository}`)
-
-					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${localRegistryUrl}/${owner}/${serviceName}:latest && ${dockerBuildCli} push ${localRegistryUrl}/${owner}/${serviceName}:latest`)
 
 					// Continue with existing AWS deployment logic
 					const newValuesFiles: string[] = []
