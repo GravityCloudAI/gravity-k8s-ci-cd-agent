@@ -94,11 +94,6 @@ jobs:
           with:
             version: v3.12.0
 
-        # Add step to package the chart
-        - name: Package Helm Chart
-          run: |
-            helm package chart/
-
         # see https://github.com/helm/chart-releaser/issues/183
         - name: Login to GitHub Container Registry
           uses: docker/login-action@v3
@@ -106,10 +101,3 @@ jobs:
             registry: ghcr.io
             username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
-
-        - name: Push chart to GHCR
-          run: |
-            REPO_LOWER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-            for pkg in *.tgz; do
-              helm push "${pkg}" "oci://ghcr.io/${REPO_LOWER}/charts"
-            done
