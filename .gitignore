@@ -4,3 +4,4 @@ dist/
 .env
 .env.dev
 image-cache/
+dev.values.yaml
