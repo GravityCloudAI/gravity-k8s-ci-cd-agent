@@ -101,8 +101,9 @@ jobs:
 
         - name: Push chart to GHCR
           run: |
+            REPO_LOWER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
             for pkg in *.tgz; do
-              helm push "${pkg}" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+              helm push "${pkg}" "oci://ghcr.io/${REPO_LOWER}/charts"
             done
 
         # see https://github.com/helm/chart-releaser/issues/183
@@ -112,13 +113,3 @@ jobs:
             registry: ghcr.io
             username: ${{ github.actor }}
             password: ${{ secrets.GITHUB_TOKEN }}
-
-        - name: Push charts to GHCR
-          run: |
-            shopt -s nullglob
-            for pkg in .cr-release-packages/*; do
-              if [ -z "${pkg:-}" ]; then
-                break
-              fi
-              helm push "${pkg}" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
-            done
