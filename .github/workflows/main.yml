@@ -69,7 +69,8 @@ jobs:
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-  release:
+  releaseHelmChart:
+      needs: buildAndDeploy
       permissions:
         contents: write # to push chart release and create a release (helm/chart-releaser-action)
         packages: write # needed for ghcr access
@@ -93,13 +94,16 @@ jobs:
           with:
             version: v3.12.0
 
-        - name: Run chart-releaser
-          uses: helm/chart-releaser-action@v1.6.0
-          with:
-            charts_dir: chart
-          env:
-            CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-            CR_GENERATE_RELEASE_NOTES: true
+        # Add step to package the chart
+        - name: Package Helm Chart
+          run: |
+            helm package chart/
+
+        - name: Push chart to GHCR
+          run: |
+            for pkg in *.tgz; do
+              helm push "${pkg}" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}/charts"
+            done
 
         # see https://github.com/helm/chart-releaser/issues/183
         - name: Login to GitHub Container Registry
