@@ -5,6 +5,9 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ $config.name }}
   namespace: {{ $.Values.global.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+    helm.sh/hook: pre-install
   labels:
     {{- include "gravity.labels" $ | nindent 4 }}
 spec:
