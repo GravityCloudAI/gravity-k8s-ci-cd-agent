@@ -1,6 +1,8 @@
 global:
   namespace: "gravity-cloud"
   storageClass: "standard"
+  nodeSelector:
+    karpenter.sh/nodepool: tooling-nodepool
 
 components:
   gravityAgent:
