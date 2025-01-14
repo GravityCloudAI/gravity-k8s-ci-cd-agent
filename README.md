@@ -264,7 +264,7 @@ persistence:
 
 3. Update the helm repo `helm repo update`
 
-4. Install the chart `helm upgrade --install gravity-cicd-agent https://gravitycloudai.github.io/gravity-k8s-ci-cd-agent -f ./chart/values.yaml -n gravity-cloud --create-namespace`
+4. Install the chart `helm upgrade --install  gravity-k8s-ci-cd-agent gravity-cloud/gravity-ci-cd-agent -f ./chart/values.yaml -n gravity-cloud --create-namespace`
 
 5. Check the deployment `kubectl get pods -n gravity-cloud`
 
