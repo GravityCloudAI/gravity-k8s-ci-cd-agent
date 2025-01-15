@@ -8,9 +8,27 @@ spec:
       approval: automatic
     - name: feat-.*
       approval: automatic
+# pre deploy scripts before any action starts
   preDeploy:
-    - name: run dummy script
-      command: bash ./dummy.sh
+    - name: run pre deploy script
+      command: bash ./pre-deploy.sh
+# post deploy scripts after all actions end
+  postDeploy:
+    - name: run post deploy script
+      branches:
+        - feat-.*
+      command: bash ./post-deploy.sh
+    - name: run once-only pre deploy script
+      branches:
+        - feat-.*
+      once: true
+      command: bash ./once-only-pre-deploy.sh
+# cleanup scripts when any deployment is automatically deleted (such as a branch is deleted)
+  cleanup:
+    - name: run cleanup script
+      branches:
+        - feat-.*
+      command: bash ./cleanup.sh
   aws:
     repository:
       - name: mono-repo-js-east

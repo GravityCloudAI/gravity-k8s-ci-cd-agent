@@ -46,6 +46,35 @@ interface DeployRun {
 	run_attempt: number;
 }
 
+interface PostDeploy {
+	name: string
+	branches?: string[]
+	once?: boolean
+	command: string
+}
+
+interface PreDeploy {
+	name: string
+	branches?: string[]
+	once?: boolean
+	command: string
+}
+
+interface Cleanup {
+	name: string
+	branches?: string[]
+	command: string
+}
+
+interface CleanupMetadata {
+	command: string;
+	repository: string;
+	owner: string;
+	repo: string;
+	branch: string;
+	servicePath: string;
+}
+
 const pool = new Pool({
 	host: process.env.POSTGRES_HOST,
 	database: process.env.POSTGRES_DB,
@@ -111,7 +140,6 @@ const checkAndCreateDatabaseTables = async () => {
 			)
 		`
 			const { rows } = await client.query(tableExistsQuery)
-			console.log("helm_deployments: ", rows)
 			if (!rows[0].exists) {
 				console.log("Table 'helm_deployments' does not exist, creating table")
 				const createTableQuery = `
@@ -145,7 +173,6 @@ const checkAndCreateDatabaseTables = async () => {
 			)
 		`
 			const { rows } = await client.query(tableExistsQuery)
-			console.log("argo_deployments: ", rows)
 			if (!rows[0].exists) {
 				console.log("Table 'argo_deployments' does not exist, creating table")
 				const createTableQuery = `
@@ -162,6 +189,37 @@ const checkAndCreateDatabaseTables = async () => {
 				await client.query(createTableQuery)
 			} else {
 				console.log("Table 'helm_deployments' already exists")
+			}
+		} catch (err) {
+			console.error("Error checking or creating table:", err)
+		} finally {
+			client.release()
+		}
+	})();
+
+	(async () => {
+		const client = await getDbConnection()
+		try {
+			const tableExistsQuery = `
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_name = 'cleanup_deployments'
+			)
+		`
+			const { rows } = await client.query(tableExistsQuery)
+			if (!rows[0].exists) {
+				console.log("Table 'cleanup_deployments' does not exist, creating table")
+				const createTableQuery = `
+				CREATE TABLE cleanup_deployments (
+					branch TEXT PRIMARY KEY,
+					metadata TEXT,
+					post_deploy_out TEXT,
+					updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+				)
+			`
+				await client.query(createTableQuery)
+			} else {
+				console.log("Table 'cleanup_deployments' already exists")
 			}
 		} catch (err) {
 			console.error("Error checking or creating table:", err)
@@ -750,6 +808,40 @@ const processBranchDeletions = async (branches: any) => {
 				}))
 			}
 		}
+
+		const cleanupBranchesWithDeployments = await client?.query(`
+			SELECT * FROM cleanup_deployments 
+			WHERE branch IN (SELECT DISTINCT branch FROM cleanup_deployments)
+		`)
+
+		for (const elem of cleanupBranchesWithDeployments?.rows) {
+
+			if (!branches.find((b: any) => b.name === elem.branch)) {
+				await client?.query("DELETE FROM cleanup_deployments WHERE branch = $1", [elem.branch])
+
+				const metadata: CleanupMetadata = JSON.parse(elem.metadata);
+				const postDeployOut: string = elem.post_deploy_out
+				const tempDir = path.join(os.tmpdir(), `cleanup-${v4()}`);
+
+				try {
+					// Clone repository to temporary directory
+					const cloneUrl = `https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/${metadata.repository}.git`;
+					await customExec("", "CLEANUP_CLONE", "", `git clone --branch ${metadata.branch} ${cloneUrl} ${tempDir}`);
+
+					// Run cleanup command in correct service context
+					const contextPath = path.join(tempDir, metadata.servicePath);
+					await customExec("", "CLEANUP_COMMAND", "", `cd ${contextPath} && POST_DEPLOY_OUTPUT='${postDeployOut}' && ${metadata.command}`);
+
+				} finally {
+					// Cleanup temporary directory
+					if (fs.existsSync(tempDir)) {
+						fs.rmSync(tempDir, { recursive: true, force: true });
+					}
+				}
+			}
+		}
+
+
 	} catch (error) {
 		console.error(`Error processing branch deletions:`, error)
 	} finally {
@@ -1135,9 +1227,34 @@ const processJob = async () => {
 
 
 					if (service.gravityConfig?.spec?.preDeploy) {
-						await Promise.all(service.gravityConfig?.spec?.preDeploy?.map(async (preDeployStep: any) => {
-							sendSlackNotification("Running Pre Deploy Command", `${preDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
-							await customExec(deploymentRunId, "PRE_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${preDeployStep.command}`)
+						await Promise.all(service.gravityConfig?.spec?.preDeploy?.map(async (preDeployStep: PreDeploy) => {
+
+							if (preDeployStep.once) {
+								const hasRunDeploy = await client?.query("SELECT COUNT(*) FROM deployments WHERE branch = $1", [lastRunBranch])
+								if (hasRunDeploy && hasRunDeploy.rows[0].count > 0) {
+									// skip any further processing
+									return
+								}
+							}
+
+							// check if branches array is null, then always run the command
+							let runCommand = true
+							if (preDeployStep.branches && preDeployStep.branches.length > 0) {
+								runCommand = preDeployStep.branches.includes(lastRunBranch)
+
+								// also check if the branch is a wildcard pattern
+								if (preDeployStep.branches.includes('.*')) {
+									const branch = preDeployStep.branches.find((branch: string) => branch.endsWith('.*'))
+									const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+									const pattern = new RegExp(`^${prefix}.*$`)
+									runCommand = pattern.test(lastRunBranch)
+								}
+							}
+
+							if (runCommand) {
+								sendSlackNotification("Running Pre Deploy Command", `${preDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
+								await customExec(deploymentRunId, "PRE_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${preDeployStep.command}`)
+							}
 						}))
 					}
 
@@ -1513,6 +1630,73 @@ const processJob = async () => {
 								await client?.query("UPDATE deployments SET status = $1 WHERE runId = $2", ["FAILED", deploymentRunId])
 								syncLogsToGravityViaWebsocket(deploymentRunId, "PIPELINE_FAILED", serviceName, JSON.stringify({ error: error.message }), true)
 								sendSlackNotification("Deployment Failed", `Error processing AWS repository ${repoDetails.name} for ${repository}: ${error}`)
+							}
+						}))
+					}
+
+					if (service.gravityConfig?.spec?.postDeploy) {
+						await Promise.all(service.gravityConfig?.spec?.postDeploy?.map(async (postDeployStep: PostDeploy) => {
+
+							if (postDeployStep.once) {
+								const hasRunDeploy = await client?.query("SELECT COUNT(*) FROM deployments WHERE branch = $1", [lastRunBranch])
+								if (hasRunDeploy && hasRunDeploy.rows[0].count > 0) {
+									// skip any further processing
+									return
+								}
+							}
+
+							// check if branches array is null, then always run the command
+							let runCommand = true
+							if (postDeployStep.branches && postDeployStep.branches.length > 0) {
+								runCommand = postDeployStep.branches.includes(lastRunBranch)
+
+								// also check if the branch is a wildcard pattern
+								if (postDeployStep.branches.includes('.*')) {
+									const branch = postDeployStep.branches.find((branch: string) => branch.endsWith('.*'))
+									const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+									const pattern = new RegExp(`^${prefix}.*$`)
+									runCommand = pattern.test(lastRunBranch)
+								}
+							}
+
+							if (runCommand) {
+								sendSlackNotification("Running Post Deploy Command", `${postDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
+								const postDeployCommandResult = await customExec(deploymentRunId, "POST_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${postDeployStep.command}`)
+
+								if (service.gravityConfig?.spec?.cleanup) {
+									await Promise.all(service.gravityConfig?.spec?.cleanup?.map(async (cleanupStep: Cleanup) => {
+										let saveInDatabase = false;
+
+										if (cleanupStep.branches && cleanupStep.branches.length > 0) {
+											saveInDatabase = cleanupStep.branches.includes(lastRunBranch);
+
+											// also check if the branch is a wildcard pattern
+											if (cleanupStep.branches.includes('.*')) {
+												const branch = cleanupStep.branches.find((branch: string) => branch.endsWith('.*'))
+												const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+												const pattern = new RegExp(`^${prefix}.*$`)
+												saveInDatabase = pattern.test(lastRunBranch)
+											}
+										}
+
+										if (saveInDatabase) {
+											const cleanupMetadata: CleanupMetadata = {
+												command: cleanupStep.command,
+												repository,
+												owner,
+												repo,
+												branch: lastRunBranch,
+												servicePath: service.servicePath
+											};
+
+											await client?.query(
+												"INSERT INTO cleanup_deployments (branch, metadata, post_deploy_out) VALUES ($1, $2, $3)",
+												[lastRunBranch, JSON.stringify(cleanupMetadata), postDeployCommandResult]
+											);
+										}
+									}));
+								}
+
 							}
 						}))
 					}
