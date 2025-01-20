@@ -4,7 +4,7 @@
   "repository": "https://github.com/GravityCloudAI/gravity-k8s-ci-cd-agent",
   "author": "Vatsal <vatsal@gravitycloud.ai>",
   "license": "MIT",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "scripts": {
     "start": "node dist/index.js",
     "build": "tsc",

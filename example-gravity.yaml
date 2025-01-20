@@ -18,11 +18,11 @@ spec:
       branches:
         - feat-.*
       command: bash ./post-deploy.sh
-    - name: run once-only pre deploy script
+    - name: run once-only post deploy script
       branches:
         - feat-.*
       once: true
-      command: bash ./once-only-pre-deploy.sh
+      command: bash ./once-only-post-deploy.sh
 # cleanup scripts when any deployment is automatically deleted (such as a branch is deleted)
   cleanup:
     - name: run cleanup script

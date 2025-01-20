@@ -722,7 +722,7 @@ spec:
 	fs.writeFileSync(tempFile, jobTemplate)
 
 	try {
-		// await customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
+		await customExec("", "CREATE_JOB", "", `kubectl apply -f ${tempFile}`, true)
 	} finally {
 		fs.unlinkSync(tempFile)
 	}
