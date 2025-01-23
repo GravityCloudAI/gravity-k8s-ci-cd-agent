@@ -574,12 +574,18 @@ const downloadFile = async (file: any, path: string, githubToken: string) => {
 	}
 }
 
-const customExec = (runId: string, action: string, serviceName: string, command: string, skipLogging: boolean = false): Promise<string> => {
+const customExec = (runId: string, action: string, serviceName: string, command: string, skipLogging: boolean = false, env: Record<string, string> = {}): Promise<string> => {
 	return new Promise((resolve, reject) => {
 
 		const cleanedCommand = command.replace(/(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|DOCKER_USERNAME)=[^\s]*/g, "$1=****").replace(/x-access-token:[^@]*@/g, "x-access-token:****@")
 		console.log(`Executing command: ${cleanedCommand}`)
-		const process = spawn(command, [], { shell: true })
+
+		const processEnv = { ...process.env, ...env };
+
+		const processCMD = spawn(command, [], {
+			shell: true,
+			env: processEnv
+		})
 
 		let output = ''
 
@@ -594,16 +600,16 @@ const customExec = (runId: string, action: string, serviceName: string, command:
 			}
 		}
 
-		process.stdout.on('data', (data) => handleOutput(data))
-		process.stderr.on('data', (data) => handleOutput(data))
+		processCMD.stdout.on('data', (data) => handleOutput(data))
+		processCMD.stderr.on('data', (data) => handleOutput(data))
 
-		process.on('error', (error) => {
+		processCMD.on('error', (error) => {
 			console.error(error)
 			syncLogsToGravityViaWebsocket(runId, action, serviceName, JSON.stringify(error.message), true)
 			reject(error)
 		})
 
-		process.on('close', (code) => {
+		processCMD.on('close', (code) => {
 			console.log(`Process exited with code: ${code}`)
 			if (code !== 0) {
 				const error = new Error(`Process exited with code: ${code}`)
@@ -618,7 +624,7 @@ const customExec = (runId: string, action: string, serviceName: string, command:
 }
 
 const sendDetailsToAgentJob = async (details: any) => {
-	const NAMESPACE = process.env.NAMESPACE || "gravity"
+	const NAMESPACE = process.env.NAMESPACE || "gravity-cloud"
 	const random4Char = Math.random().toString(36).substring(2, 6)
 
 	const jobTemplate = `apiVersion: batch/v1
@@ -760,9 +766,9 @@ const processBranchDeletions = async (branches: any) => {
 	const client = await getDbConnection()
 	try {
 		const branchesWithHelmDeployments = await client?.query(`
-		SELECT * FROM helm_deployments 
-		WHERE branch IN (SELECT DISTINCT branch FROM helm_deployments)
-	`)
+			SELECT * FROM helm_deployments 
+			WHERE branch IN (SELECT DISTINCT branch FROM helm_deployments)
+		`)
 
 		// check if the branches are deleted, if so delete the helm deployments from the table
 		for (const elem of branchesWithHelmDeployments?.rows) {
@@ -783,9 +789,9 @@ const processBranchDeletions = async (branches: any) => {
 		}
 
 		const argoBranchesWithDeployments = await client?.query(`
-		SELECT * FROM argo_deployments 
-		WHERE branch IN (SELECT DISTINCT branch FROM argo_deployments)
-	`)
+			SELECT * FROM argo_deployments 
+			WHERE branch IN (SELECT DISTINCT branch FROM argo_deployments)
+		`)
 
 		for (const elem of argoBranchesWithDeployments?.rows) {
 			if (!branches.find((b: any) => b.name === elem.branch)) {
@@ -826,11 +832,14 @@ const processBranchDeletions = async (branches: any) => {
 				try {
 					// Clone repository to temporary directory
 					const cloneUrl = `https://x-access-token:${process.env.GITHUB_TOKEN}@github.com/${metadata.repository}.git`;
-					await customExec("", "CLEANUP_CLONE", "", `git clone --branch ${metadata.branch} ${cloneUrl} ${tempDir}`);
+					await customExec("", "CLEANUP_CLONE", "", `git clone ${cloneUrl} ${tempDir}`);
 
 					// Run cleanup command in correct service context
-					const contextPath = path.join(tempDir, metadata.servicePath);
-					await customExec("", "CLEANUP_COMMAND", "", `cd ${contextPath} && POST_DEPLOY_OUTPUT='${postDeployOut}' && ${metadata.command}`);
+					// const contextPath = path.join(tempDir, metadata.servicePath);
+
+					await customExec("", "CLEANUP_COMMAND", "", `cd ${tempDir} && ${metadata.command}`, false, {
+						POST_DEPLOY_OUTPUT: postDeployOut?.trim()
+					});
 
 				} finally {
 					// Cleanup temporary directory
@@ -1170,8 +1179,8 @@ if (process.env.ENV === "development") {
 	redisClient.on('ready', () => console.info(`[APP] Connected to Redis`));
 	redisClient.connect();
 	checkAndCreateDatabaseTables()
-	// setInterval(syncGitRepo, 30000)
-	syncGitRepo()
+	setInterval(syncGitRepo, 30000)
+	// syncGitRepo()
 	startServer()
 }
 
@@ -1243,8 +1252,8 @@ const processJob = async () => {
 								runCommand = preDeployStep.branches.includes(lastRunBranch)
 
 								// also check if the branch is a wildcard pattern
-								if (preDeployStep.branches.includes('.*')) {
-									const branch = preDeployStep.branches.find((branch: string) => branch.endsWith('.*'))
+								if (preDeployStep.branches.some(branch => branch.includes('.*'))) {
+									const branch = preDeployStep.branches.find((branch: string) => branch.includes('.*'))
 									const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 									const pattern = new RegExp(`^${prefix}.*$`)
 									runCommand = pattern.test(lastRunBranch)
@@ -1260,7 +1269,7 @@ const processJob = async () => {
 
 					sendSlackNotification("Docker Build Started", `Docker build started for ${serviceName} / ${lastRunBranch} in ${repository}`)
 
-					const localRegistryUrl = `${process.env.DOCKER_REGISTRY_URL}:${process.env.DOCKER_REGISTRY_PORT}`
+					const localRegistryUrl = `${process.env?.DOCKER_REGISTRY_URL}:${process.env?.DOCKER_REGISTRY_PORT}`
 
 					// Build Docker image
 					let dockerBuildCli = process.env.ENV === "production" ? "buildah --storage-driver vfs" : "docker"
@@ -1651,10 +1660,11 @@ const processJob = async () => {
 								runCommand = postDeployStep.branches.includes(lastRunBranch)
 
 								// also check if the branch is a wildcard pattern
-								if (postDeployStep.branches.includes('.*')) {
-									const branch = postDeployStep.branches.find((branch: string) => branch.endsWith('.*'))
+								if (postDeployStep.branches.some(branch => branch.includes('.*'))) {
+									const branch = postDeployStep.branches.find((branch: string) => branch.includes('.*'))
 									const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 									const pattern = new RegExp(`^${prefix}.*$`)
+
 									runCommand = pattern.test(lastRunBranch)
 								}
 							}
@@ -1671,8 +1681,8 @@ const processJob = async () => {
 											saveInDatabase = cleanupStep.branches.includes(lastRunBranch);
 
 											// also check if the branch is a wildcard pattern
-											if (cleanupStep.branches.includes('.*')) {
-												const branch = cleanupStep.branches.find((branch: string) => branch.endsWith('.*'))
+											if (cleanupStep.branches.some(branch => branch.includes('.*'))) {
+												const branch = cleanupStep.branches.find((branch: string) => branch.includes('.*'))
 												const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 												const pattern = new RegExp(`^${prefix}.*$`)
 												saveInDatabase = pattern.test(lastRunBranch)
@@ -1775,7 +1785,7 @@ const processJob = async () => {
 							// remove branch name from chart name
 							const helmChartInstallCommand = `helm upgrade --install ${cleanChartName} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${valuesFilePath}`
 							console.log(`Helm command: ${helmChartInstallCommand}`)
-							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmChartInstallCommand, false)
+							// await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmChartInstallCommand, false)
 							fs.unlinkSync(valuesFilePath)
 						} catch (error) {
 							console.error(`Error deploying chart ${chart.chartName}: ${error}`)
