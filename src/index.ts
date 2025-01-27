@@ -631,6 +631,16 @@ const sendDetailsToAgentJob = async (details: any) => {
 	const NAMESPACE = process.env.NAMESPACE || "gravity-cloud"
 	const random4Char = Math.random().toString(36).substring(2, 6)
 
+	let additionalEnvVars: { name: string, value: string }[] = []
+	if (process.env.ADDITIONAL_ENV) {
+		additionalEnvVars = process.env.ADDITIONAL_ENV.split(',')
+			.map(pair => {
+				const [name, value] = pair.split('=')
+				return { name, value }
+			})
+			.filter(env => env.name && env.value)
+	}
+
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
 metadata:
@@ -712,6 +722,9 @@ spec:
               value: "${process.env.DOCKER_REGISTRY_PORT}"  			  		
             - name: DEPLOYMENT_RUN_ID
               value: "${details.deploymentRunId}"
+            ${additionalEnvVars.map(env => `
+            - name: ${env.name}
+              value: "${env.value}"`).join('')}
           resources:
             requests:
               memory: "512Mi"
