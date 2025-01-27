@@ -23,6 +23,9 @@ spec:
         - feat-.*
       once: true
       command: bash ./once-only-post-deploy.sh
+      env:
+        - name: REGION
+          value: us-east-1
 # cleanup scripts when any deployment is automatically deleted (such as a branch is deleted)
   cleanup:
     - name: run cleanup script

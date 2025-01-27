@@ -51,6 +51,10 @@ interface PostDeploy {
 	branches?: string[]
 	once?: boolean
 	command: string
+	env?: {
+		name: string
+		value: string
+	}[]
 }
 
 interface PreDeploy {
@@ -1671,7 +1675,7 @@ const processJob = async () => {
 
 							if (runCommand) {
 								sendSlackNotification("Running Post Deploy Command", `${postDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
-								const postDeployCommandResult = await customExec(deploymentRunId, "POST_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${postDeployStep.command}`)
+								const postDeployCommandResult = await customExec(deploymentRunId, "POST_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${postDeployStep.command}`, false, { BRANCH: lastRunBranch, ...(postDeployStep.env?.reduce((acc, env) => ({ ...acc, [env.name]: env.value }), {}) || {}) })
 
 								if (service.gravityConfig?.spec?.cleanup) {
 									await Promise.all(service.gravityConfig?.spec?.cleanup?.map(async (cleanupStep: Cleanup) => {
