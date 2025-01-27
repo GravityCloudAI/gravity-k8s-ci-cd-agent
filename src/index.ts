@@ -1001,6 +1001,27 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 	}
 };
 
+const getAllBranches = async (octokit: Octokit, owner: string, repo: string): Promise<any[]> => {
+    let allBranches: any[] = [];
+    let page = 1;
+    
+    while (true) {
+        const { data: branches } = await octokit.rest.repos.listBranches({
+            owner,
+            repo,
+            per_page: 100,
+            page
+        });
+        
+        if (branches.length === 0) break;
+        
+        allBranches = allBranches.concat(branches);
+        page++;
+    }
+    
+    return allBranches;
+}
+
 const syncGitRepo = async () => {
 	let client: pg.PoolClient | null = null
 	try {
@@ -1015,11 +1036,8 @@ const syncGitRepo = async () => {
 				const [owner, repo] = repository.split('/')
 
 				// get all branches for the repository
-				const { data: branches } = await octokit.rest.repos.listBranches({
-					owner,
-					repo,
-					per_page: 100
-				})
+                const branches = await getAllBranches(octokit, owner, repo);
+
 				try {
 					processBranchDeletions(branches)
 					syncMetaDataWithGravity(repository, branches)
@@ -1028,13 +1046,28 @@ const syncGitRepo = async () => {
 				}
 
 				// Get latest deploy run
-				const githubActionsStatus = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
-					headers: {
-						"Authorization": `Bearer ${githubToken}`
-					}
-				})
+				let allWorkflowRuns: any = []
+				let page = 1
 
-				const completedRuns = githubActionsStatus.data.workflow_runs
+				while (true) {
+					const response = await axios.get(`https://api.github.com/repos/${repository}/actions/runs`, {
+						headers: {
+							"Authorization": `Bearer ${githubToken}`
+						},
+						params: {
+							per_page: 100,
+							page: page
+						}
+					})
+
+					const runs = response.data.workflow_runs
+					if (runs.length === 0) break
+
+					allWorkflowRuns = allWorkflowRuns.concat(runs)
+					page++
+				}
+
+				const completedRuns = allWorkflowRuns
 					.filter((run: DeployRun) => run.name === (process.env.GITHUB_JOB_NAME || "Deploy") && run.status === "completed")
 					.reduce((acc: { [key: string]: DeployRun }, run: DeployRun) => {
 						const branch = run.head_branch;
