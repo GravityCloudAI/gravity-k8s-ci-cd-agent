@@ -1017,7 +1017,8 @@ const syncGitRepo = async () => {
 				// get all branches for the repository
 				const { data: branches } = await octokit.rest.repos.listBranches({
 					owner,
-					repo
+					repo,
+					per_page: 100
 				})
 				try {
 					processBranchDeletions(branches)
