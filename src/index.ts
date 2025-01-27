@@ -1386,7 +1386,7 @@ const processJob = async () => {
 										const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
 										await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
 
-										await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
+										// await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
 
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 

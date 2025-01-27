@@ -70,6 +70,13 @@ components:
         POSTGRES_DB: ""
         POSTGRES_USER: ""
         POSTGRES_PASSWORD: ""
+      volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-gravity-pvc
     service:
       name: postgres-gravity-service
       type: ClusterIP
@@ -97,6 +104,13 @@ components:
           cpu: "500m"
       env:
         REDIS_PASSWORD: ""
+      volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-gravity-pvc
     service:
       name: redis-gravity-service
       type: ClusterIP
@@ -120,6 +134,13 @@ components:
           cpu: "4000m"
       env:
         REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      volumeMounts:
+        - name: registry-data
+          mountPath: /var/lib/registry
+      volumes:
+        - name: registry-data
+          persistentVolumeClaim:
+            claimName: agent-gravity-pvc
     service:
       name: gravity-docker-registry
       type: ClusterIP
