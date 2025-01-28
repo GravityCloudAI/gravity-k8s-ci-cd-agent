@@ -79,6 +79,14 @@ interface CleanupMetadata {
 	servicePath: string;
 }
 
+interface Action {
+	name: string;
+	uses: string;
+	with: {
+		version: string;
+	}
+}
+
 const pool = new Pool({
 	host: process.env.POSTGRES_HOST,
 	database: process.env.POSTGRES_DB,
@@ -997,24 +1005,24 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 };
 
 const getAllBranches = async (octokit: Octokit, owner: string, repo: string): Promise<any[]> => {
-    let allBranches: any[] = [];
-    let page = 1;
-    
-    while (true) {
-        const { data: branches } = await octokit.rest.repos.listBranches({
-            owner,
-            repo,
-            per_page: 100,
-            page
-        });
-        
-        if (branches.length === 0) break;
-        
-        allBranches = allBranches.concat(branches);
-        page++;
-    }
-    
-    return allBranches;
+	let allBranches: any[] = [];
+	let page = 1;
+
+	while (true) {
+		const { data: branches } = await octokit.rest.repos.listBranches({
+			owner,
+			repo,
+			per_page: 100,
+			page
+		});
+
+		if (branches.length === 0) break;
+
+		allBranches = allBranches.concat(branches);
+		page++;
+	}
+
+	return allBranches;
 }
 
 const syncGitRepo = async () => {
@@ -1031,7 +1039,7 @@ const syncGitRepo = async () => {
 				const [owner, repo] = repository.split('/')
 
 				// get all branches for the repository
-                const branches = await getAllBranches(octokit, owner, repo);
+				const branches = await getAllBranches(octokit, owner, repo);
 
 				try {
 					processBranchDeletions(branches)
@@ -1307,8 +1315,70 @@ const processJob = async () => {
 							}
 
 							if (runCommand) {
+								await customExec(deploymentRunId, "PRE_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${preDeployStep?.command}`)
 								sendSlackNotification("Running Pre Deploy Command", `${preDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
-								await customExec(deploymentRunId, "PRE_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${preDeployStep.command}`)
+							}
+						}))
+					}
+
+					if (service.gravityConfig?.spec?.actions) {
+						await Promise.all(service.gravityConfig?.spec?.actions?.map(async (action: Action) => {
+							try {
+								switch (action.uses) {
+									case 'actions/setup-go@v1':
+										const goVersion = action.with.version
+										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Installing Go version ${goVersion}`)
+
+										// Download and extract Go
+										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
+											curl -OL https://golang.org/dl/go${goVersion}.linux-amd64.tar.gz && \
+											rm -rf /usr/local/go && \
+											tar -C /usr/local -xzf go${goVersion}.linux-amd64.tar.gz && \
+											rm go${goVersion}.linux-amd64.tar.gz
+										`)
+
+										// Add Go to global PATH by creating a profile file
+										fs.writeFileSync('/etc/profile.d/go.sh', `
+											export PATH=$PATH:/usr/local/go/bin
+											export GOPATH=/root/go
+											export PATH=$PATH:$GOPATH/bin
+										`)
+										fs.chmodSync('/etc/profile.d/go.sh', '755')
+
+										// Source the profile in current process
+										process.env.PATH = `${process.env.PATH}:/usr/local/go/bin`
+										process.env.GOPATH = '/root/go'
+										break
+
+									case 'cue-lang/setup-cue@v1':
+										const cueVersion = action.with.version
+										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Installing Cue version ${cueVersion}`)
+										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
+											curl -OL https://github.com/cue-lang/cue/releases/download/${cueVersion}/cue_${cueVersion}_linux_amd64.tar.gz && \
+											tar -xzf cue_${cueVersion}_linux_amd64.tar.gz && \
+											mv cue /usr/local/bin/cue && \
+											rm cue_${cueVersion}_linux_amd64.tar.gz
+										`)
+										break
+
+									case 'actions/encore@v1':
+										const encoreVersion = action.with.version
+										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Installing Encore version ${encoreVersion}`)
+										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
+											curl -L https://encore.dev/install.sh | bash -s -- ${encoreVersion} && \
+											mkdir -p /usr/local/bin && \
+											mv ~/.encore/bin/encore /usr/local/bin/encore
+										`)
+										break
+
+									default:
+										console.warn(`Unknown action: ${action.uses}`)
+										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Unknown action: ${action.uses}`, true)
+								}
+							} catch (error) {
+								console.error(`Error installing action ${action.uses}:`, error)
+								syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Failed to install ${action.uses}: ${error.message}`, true)
+								throw error
 							}
 						}))
 					}

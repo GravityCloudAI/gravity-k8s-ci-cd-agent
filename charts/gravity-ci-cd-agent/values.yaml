@@ -73,6 +73,7 @@ components:
       volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data
+          subPath: postgres
       volumes:
         - name: postgres-data
           persistentVolumeClaim:

@@ -1,16 +1,15 @@
-FROM node:22.11.0-bookworm
+FROM node:22.11.0-bookworm-slim
 
 # Install dependencies for Buildah and Docker
-RUN apt-get update \
-    && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-transport-https \
     ca-certificates \
     curl \
     gnupg \
-    lsb-release \
-    software-properties-common \
-    python3-pip python3-dev unzip \
-    iptables
+    python3-pip \
+    unzip \
+    iptables \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/sid.list
 

@@ -56,3 +56,17 @@ spec:
         argoApplicationFile:
           source: s3
           bucket: gravity-app-prod-values/feat-.*
+
+  actions:
+    - name: 📦 Set up Go
+      uses: actions/setup-go@v1
+      with:
+        version: 1.22.6
+    - name: 📦 Set up Cue
+      uses: cue-lang/setup-cue@v1
+      with:
+        version: "v0.8.2"
+    - name: 📦 Set up Encore
+      uses: actions/encore@v1
+      with:
+        version: encore-v1.39
