@@ -6,7 +6,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
-    python3-pip \
     unzip \
     iptables \
     && rm -rf /var/lib/apt/lists/*
