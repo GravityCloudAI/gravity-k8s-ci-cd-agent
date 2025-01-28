@@ -664,8 +664,6 @@ spec:
               add:
                 - SYS_ADMIN
           volumeMounts:
-            - name: buildah-storage
-              mountPath: /var/lib/containers
             - name: cgroup
               mountPath: /sys/fs/cgroup
               readOnly: true
@@ -733,9 +731,6 @@ spec:
               memory: "4096Mi"
               cpu: "4000m"
       volumes:
-        - name: buildah-storage
-          persistentVolumeClaim:
-            claimName: agent-gravity-pvc
         - name: cgroup
           hostPath:
             path: /sys/fs/cgroup
