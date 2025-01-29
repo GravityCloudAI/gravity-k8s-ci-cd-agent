@@ -1329,24 +1329,33 @@ const processJob = async () => {
 										const goVersion = action.with.version
 										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Installing Go version ${goVersion}`)
 
+										const arch = await customExec(deploymentRunId, "SETUP_ACTION", serviceName, "uname -m")
+										const goArch = arch.trim() === 'x86_64' ? 'amd64' :
+											arch.trim() === 'aarch64' ? 'arm64' :
+												arch.trim() === 'armv7l' ? 'armv6l' :
+													'amd64' // fallback to amd64 if unknown
+
 										// Download and extract Go
 										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
-											curl -OL https://golang.org/dl/go${goVersion}.linux-amd64.tar.gz && \
+											curl -OL https://golang.org/dl/go${goVersion}.linux-${goArch}.tar.gz && \
 											rm -rf /usr/local/go && \
-											tar -C /usr/local -xzf go${goVersion}.linux-amd64.tar.gz && \
-											rm go${goVersion}.linux-amd64.tar.gz
+											tar -C /usr/local -xzf go${goVersion}.linux-${goArch}.tar.gz && \
+											rm go${goVersion}.linux-${goArch}.tar.gz && \
+											ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
+											ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 										`)
 
-										// Add Go to global PATH by creating a profile file
-										fs.writeFileSync('/etc/profile.d/go.sh', `
-											export PATH=$PATH:/usr/local/go/bin
-											export GOPATH=/root/go
-											export PATH=$PATH:$GOPATH/bin
+										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
+											mkdir -p /root/go && \
+											chmod 755 /root/go
 										`)
+
+										// Add Go to global PATH and set GOPATH
+										fs.writeFileSync('/etc/profile.d/go.sh', 'export PATH=$PATH:/usr/local/go/bin\nexport GOPATH=/root/go\nexport PATH=$PATH:$GOPATH/bin\n')
 										fs.chmodSync('/etc/profile.d/go.sh', '755')
 
-										// Source the profile in current process
-										process.env.PATH = `${process.env.PATH}:/usr/local/go/bin`
+										// Set environment variables for current process
+										process.env.PATH = `${process.env.PATH}:/usr/local/go/bin:/root/go/bin`
 										process.env.GOPATH = '/root/go'
 										break
 
