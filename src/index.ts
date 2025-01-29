@@ -689,36 +689,36 @@ spec:
               mountPath: /sys/fs/cgroup
               readOnly: true
           env:
-						- name: POSTGRES_PASSWORD
-							valueFrom:
-								secretKeyRef:
-									name: postgres-secrets
-									key: postgres-password
-						- name: REDIS_PASSWORD
-							valueFrom:
-								secretKeyRef:
-									name: redis-secrets
-									key: redis-password
-						- name: GRAVITY_API_KEY
-							valueFrom:
-								secretKeyRef:
-									name: gravity-agent-secrets
-									key: gravity-api-key
-						- name: GITHUB_TOKEN
-							valueFrom:
-								secretKeyRef:
-									name: gravity-agent-secrets
-									key: github-token
-						- name: ARGOCD_TOKEN
-							valueFrom:
-								secretKeyRef:
-									name: gravity-agent-secrets
-									key: argo-cd-token
-						- name: AWS_ACCESS_KEY_ID
-							valueFrom:
-									secretKeyRef:
-										name: gravity-agent-secrets
-										key: aws-access-key-id${secretEnvsYaml}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: postgres-password
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secrets
+                  key: redis-password
+            - name: GRAVITY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: gravity-api-key
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: github-token
+            - name: ARGOCD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: argo-cd-token
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: aws-access-key-id${secretEnvsYaml}
             - name: GRAVITY_WEBSOCKET_URL
               value: "${process.env.GRAVITY_WEBSOCKET_URL}"
             - name: GRAVITY_API_URL
@@ -754,7 +754,7 @@ spec:
             - name: DOCKER_REGISTRY_URL
               value: "${process.env.DOCKER_REGISTRY_URL}"
             - name: DOCKER_REGISTRY_PORT
-              value: "${process.env.DOCKER_REGISTRY_PORT}"  			  		
+              value: "${process.env.DOCKER_REGISTRY_PORT}"
             - name: DEPLOYMENT_RUN_ID
               value: "${details.deploymentRunId}"${additionalEnvVarsFromString.map(env => `
             - name: ${env.name}
