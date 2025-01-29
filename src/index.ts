@@ -640,15 +640,88 @@ const sendDetailsToAgentJob = async (details: any) => {
 	const NAMESPACE = process.env.NAMESPACE || "gravity-cloud"
 	const random4Char = Math.random().toString(36).substring(2, 6)
 
-	let additionalEnvVars: { name: string, value: string }[] = []
+	const predefinedSecrets = `
+	- name: POSTGRES_PASSWORD
+	  valueFrom:
+		secretKeyRef:
+		  name: postgres-secrets
+		  key: postgres-password
+	- name: REDIS_PASSWORD
+	  valueFrom:
+		secretKeyRef:
+		  name: redis-secrets
+		  key: redis-password
+	- name: GRAVITY_API_KEY
+	  valueFrom:
+		secretKeyRef:
+		  name: gravity-agent-secrets
+		  key: gravity-api-key
+	- name: GITHUB_TOKEN
+	  valueFrom:
+		secretKeyRef:
+		  name: gravity-agent-secrets
+		  key: github-token
+	- name: ARGOCD_TOKEN
+	  valueFrom:
+		secretKeyRef:
+		  name: gravity-agent-secrets
+		  key: argo-cd-token
+	- name: AWS_ACCESS_KEY_ID
+	  valueFrom:
+		secretKeyRef:
+		  name: gravity-agent-secrets
+		  key: aws-access-key-id
+	- name: AWS_SECRET_ACCESS_KEY
+	  valueFrom:
+		secretKeyRef:
+		  name: gravity-agent-secrets
+		  key: aws-secret-access-key`
+
+	let additionalEnvVarsFromString: { name: string, value: string }[] = []
 	if (process.env.ADDITIONAL_ENV) {
-		additionalEnvVars = process.env.ADDITIONAL_ENV.split(',')
+		additionalEnvVarsFromString = process.env.ADDITIONAL_ENV.split(',')
 			.map(pair => {
 				const [name, value] = pair.split('=')
 				return { name, value }
 			})
 			.filter(env => env.name && env.value)
 	}
+
+
+	const knownSecretEnvs = [
+		'POSTGRES_PASSWORD',
+		'REDIS_PASSWORD',
+		'GRAVITY_API_KEY',
+		'GITHUB_TOKEN',
+		'AWS_ACCESS_KEY_ID',
+		'AWS_SECRET_ACCESS_KEY',
+		'ARGOCD_TOKEN'
+	]
+
+	// Get all environment variables that use secretKeyRef, excluding known secrets
+	const secretEnvs = Object.entries(process.env)
+		.filter(([key, value]) => {
+			// Skip known secret env vars
+			if (knownSecretEnvs.includes(key)) return false
+
+			try {
+				const parsed = JSON.parse(value ?? '')
+				// Check if it's a secretKeyRef structure
+				return parsed?.valueFrom?.secretKeyRef?.name && parsed?.valueFrom?.secretKeyRef?.key
+			} catch {
+				return false
+			}
+		})
+		.map(([name, value]) => {
+			const parsed = JSON.parse(value ?? '')
+			return `
+		- name: ${name}
+		  valueFrom:
+			secretKeyRef:
+			  name: ${parsed.valueFrom.secretKeyRef.name}
+			  key: ${parsed.valueFrom.secretKeyRef.key}`
+		})
+		.join('\n')
 
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
@@ -677,8 +750,8 @@ spec:
               mountPath: /sys/fs/cgroup
               readOnly: true
           env:
-            - name: GRAVITY_API_KEY
-              value: "${process.env.GRAVITY_API_KEY}"
+			${predefinedSecrets}
+			${secretEnvs}
             - name: GRAVITY_WEBSOCKET_URL
               value: "${process.env.GRAVITY_WEBSOCKET_URL}"
             - name: GRAVITY_API_URL
@@ -687,26 +760,18 @@ spec:
               value: "true"
             - name: ENV
               value: "${process.env.ENV}"
-            - name: GITHUB_TOKEN
-              value: "${process.env.GITHUB_TOKEN}"
             - name: GITHUB_REPOSITORIES
               value: "${process.env.GITHUB_REPOSITORIES}"
             - name: GIT_BRANCHES_ALLOWED
               value: "${process.env.GIT_BRANCHES_ALLOWED}"
             - name: GITHUB_JOB_NAME
               value: "${process.env.GITHUB_JOB_NAME}"
-            - name: AWS_ACCESS_KEY_ID
-              value: "${process.env.AWS_ACCESS_KEY_ID}"
-            - name: AWS_SECRET_ACCESS_KEY
-              value: "${process.env.AWS_SECRET_ACCESS_KEY}"
             - name: AWS_ACCOUNT_ID
               value: "${process.env.AWS_ACCOUNT_ID}"
             - name: POSTGRES_HOST
               value: "${process.env.POSTGRES_HOST}"
             - name: POSTGRES_USER
               value: "${process.env.POSTGRES_USER}"
-            - name: POSTGRES_PASSWORD
-              value: "${process.env.POSTGRES_PASSWORD}"
             - name: POSTGRES_DB
               value: "${process.env.POSTGRES_DB}"
             - name: POSTGRES_PORT
@@ -715,21 +780,17 @@ spec:
               value: "${process.env.REDIS_HOST}"
             - name: REDIS_PORT
               value: "${process.env.REDIS_PORT}"
-            - name: REDIS_PASSWORD
-              value: "${process.env.REDIS_PASSWORD}"
             - name: SLACK_WEBHOOK_URL
               value: "${process.env.SLACK_WEBHOOK_URL}"
             - name: ARGOCD_URL
               value: "${process.env.ARGOCD_URL}"
-            - name: ARGOCD_TOKEN
-              value: "${process.env.ARGOCD_TOKEN}"
             - name: DOCKER_REGISTRY_URL
               value: "${process.env.DOCKER_REGISTRY_URL}"
             - name: DOCKER_REGISTRY_PORT
               value: "${process.env.DOCKER_REGISTRY_PORT}"  			  		
             - name: DEPLOYMENT_RUN_ID
               value: "${details.deploymentRunId}"
-            ${additionalEnvVars.map(env => `
+            ${additionalEnvVarsFromString.map(env => `
             - name: ${env.name}
               value: "${env.value}"`).join('')}
           resources:

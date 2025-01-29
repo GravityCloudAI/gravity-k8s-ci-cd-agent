@@ -20,29 +20,55 @@ components:
           memory: "8192Mi"
           cpu: "4000m"
       env:
-        GRAVITY_API_KEY: ""
-        GRAVITY_WEBSOCKET_URL: ""
-        GRAVITY_API_URL: ""
+        GRAVITY_API_KEY:
+          valueFrom:
+            secretKeyRef:
+              name: gravity-agent-secrets
+              key: gravity-api-key
+        GITHUB_TOKEN:
+          valueFrom:
+            secretKeyRef:
+              name: gravity-agent-secrets
+              key: github-token
+        AWS_ACCESS_KEY_ID:
+          valueFrom:
+            secretKeyRef:
+              name: gravity-agent-secrets
+              key: aws-access-key-id
+        AWS_SECRET_ACCESS_KEY:
+          valueFrom:
+            secretKeyRef:
+              name: gravity-agent-secrets
+              key: aws-secret-access-key
+        POSTGRES_PASSWORD:
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secrets
+              key: postgres-password
+        REDIS_PASSWORD:
+          valueFrom:
+            secretKeyRef:
+              name: redis-secrets
+              key: redis-password
+        ARGOCD_TOKEN:
+          valueFrom:
+            secretKeyRef:
+              name: gravity-agent-secrets
+              key: argo-cd-token
         ENV: "production"
         NAMESPACE: "gravity-cloud"
-        GITHUB_TOKEN: ""
         GITHUB_REPOSITORIES: ""
         GIT_BRANCHES_ALLOWED: ""
         GITHUB_JOB_NAME: ""
-        AWS_ACCESS_KEY_ID: ""
-        AWS_SECRET_ACCESS_KEY: ""
         AWS_ACCOUNT_ID: ""
         POSTGRES_HOST: "postgres-gravity-service"
         POSTGRES_USER: ""
-        POSTGRES_PASSWORD: ""
         POSTGRES_DB: ""
         POSTGRES_PORT: "5432"
         REDIS_HOST: "redis-gravity-service"
         REDIS_PORT: "6379"
-        REDIS_PASSWORD: ""
         SLACK_WEBHOOK_URL: ""
         ARGOCD_URL: ""
-        ARGOCD_TOKEN: ""
         DOCKER_REGISTRY_URL: ""
         DOCKER_REGISTRY_PORT: "5000"
     service:
@@ -69,7 +95,11 @@ components:
       env:
         POSTGRES_DB: ""
         POSTGRES_USER: ""
-        POSTGRES_PASSWORD: ""
+        POSTGRES_PASSWORD:
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secrets
+              key: postgres-password
       volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data
@@ -92,7 +122,7 @@ components:
         repository: redis
         tag: latest
         pullPolicy: IfNotPresent
-      command: 
+      command:
         - "/bin/sh"
         - "-c"
         - "redis-server --requirepass $(REDIS_PASSWORD)"
@@ -104,7 +134,11 @@ components:
           memory: "512Mi"
           cpu: "500m"
       env:
-        REDIS_PASSWORD: ""
+        REDIS_PASSWORD:
+          valueFrom:
+            secretKeyRef:
+              name: redis-secrets
+              key: redis-password
       volumeMounts:
         - name: redis-data
           mountPath: /data
@@ -157,7 +191,17 @@ rbac:
     name: gravity-job-agent-role
     rules:
       - apiGroups: [""]
-        resources: ["pods", "pods/log", "pods/exec", "services", "secrets", "configmaps", "persistentvolumeclaims", "serviceaccounts"]
+        resources:
+          [
+            "pods",
+            "pods/log",
+            "pods/exec",
+            "services",
+            "secrets",
+            "configmaps",
+            "persistentvolumeclaims",
+            "serviceaccounts",
+          ]
         verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
       - apiGroups: [""]
         resources: ["secrets", "events", "namespaces"]
@@ -196,3 +240,22 @@ persistence:
     name: agent-gravity-pvc
     size: "20Gi"
     accessMode: ReadWriteOnce
+
+secrets:
+  gravityAgent:
+    name: gravity-agent-secrets
+    data:
+      gravity-api-key: ""
+      github-token: ""
+      aws-access-key-id: ""
+      aws-secret-access-key: ""
+      argo-cd-token: ""
+  postgres:
+    name: postgres-secrets
+    data:
+      postgres-password: ""
+
+  redis:
+    name: redis-secrets
+    data:
+      redis-password: ""
