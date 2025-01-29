@@ -641,41 +641,41 @@ const sendDetailsToAgentJob = async (details: any) => {
 	const random4Char = Math.random().toString(36).substring(2, 6)
 
 	const predefinedSecrets = `
-	- name: POSTGRES_PASSWORD
-	  valueFrom:
-		secretKeyRef:
-		  name: postgres-secrets
-		  key: postgres-password
-	- name: REDIS_PASSWORD
-	  valueFrom:
-		secretKeyRef:
-		  name: redis-secrets
-		  key: redis-password
-	- name: GRAVITY_API_KEY
-	  valueFrom:
-		secretKeyRef:
-		  name: gravity-agent-secrets
-		  key: gravity-api-key
-	- name: GITHUB_TOKEN
-	  valueFrom:
-		secretKeyRef:
-		  name: gravity-agent-secrets
-		  key: github-token
-	- name: ARGOCD_TOKEN
-	  valueFrom:
-		secretKeyRef:
-		  name: gravity-agent-secrets
-		  key: argo-cd-token
-	- name: AWS_ACCESS_KEY_ID
-	  valueFrom:
-		secretKeyRef:
-		  name: gravity-agent-secrets
-		  key: aws-access-key-id
-	- name: AWS_SECRET_ACCESS_KEY
-	  valueFrom:
-		secretKeyRef:
-		  name: gravity-agent-secrets
-		  key: aws-secret-access-key`
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: postgres-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+                secretKeyRef:
+                  name: redis-secrets
+                  key: redis-password
+        - name: GRAVITY_API_KEY
+          valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: gravity-api-key
+        - name: GITHUB_TOKEN
+          valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: github-token
+        - name: ARGOCD_TOKEN
+          valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: argo-cd-token
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: aws-access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: aws-secret-access-key`
 
 	let additionalEnvVarsFromString: { name: string, value: string }[] = []
 	if (process.env.ADDITIONAL_ENV) {
@@ -687,17 +687,17 @@ const sendDetailsToAgentJob = async (details: any) => {
 			.filter(env => env.name && env.value)
 	}
 
-	const secretEnvsYaml = process.env.CUSTOM_SECRETS ? 
-    Object.entries(yaml.parse(process.env.CUSTOM_SECRETS)).map(([name, value]: [string, any]) => ({
-        name,
-        valueFrom: value.valueFrom
-    })).map(secret => 
-        `\n            - name: ${secret.name}
+	const secretEnvsYaml = process.env.CUSTOM_SECRETS ?
+		Object.entries(yaml.parse(process.env.CUSTOM_SECRETS)).map(([name, value]: [string, any]) => ({
+			name,
+			valueFrom: value.valueFrom
+		})).map(secret =>
+			`\n            - name: ${secret.name}
               valueFrom:
                 secretKeyRef:
                   name: ${secret.valueFrom.secretKeyRef.name}
                   key: ${secret.valueFrom.secretKeyRef.key}`
-    ).join('') : '';
+		).join('') : '';
 
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
