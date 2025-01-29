@@ -699,29 +699,23 @@ const sendDetailsToAgentJob = async (details: any) => {
 	]
 
 	// Get all environment variables that use secretKeyRef, excluding known secrets
-	const secretEnvs = Object.entries(process.env)
-		.filter(([key, value]) => {
-			// Skip known secret env vars
-			if (knownSecretEnvs.includes(key)) return false
-
-			try {
-				const parsed = JSON.parse(value ?? '')
-				// Check if it's a secretKeyRef structure
-				return parsed?.valueFrom?.secretKeyRef?.name && parsed?.valueFrom?.secretKeyRef?.key
-			} catch {
-				return false
-			}
-		})
-		.map(([name, value]) => {
-			const parsed = JSON.parse(value ?? '')
-			return `
-		- name: ${name}
-		  valueFrom:
-			secretKeyRef:
-			  name: ${parsed.valueFrom.secretKeyRef.name}
-			  key: ${parsed.valueFrom.secretKeyRef.key}`
-		})
-		.join('\n')
+	const secretEnvsYaml = Object.entries(process.env)
+	.filter(([key, value]) => {
+	  if (knownSecretEnvs.includes(key)) return false
+	  try {
+		const parsed = JSON.parse(value ?? '')
+		return parsed?.valueFrom?.secretKeyRef?.name && parsed?.valueFrom?.secretKeyRef?.key
+	  } catch {
+		return false
+	  }
+	})
+	.map(([name, value]) => {
+	  const parsed = JSON.parse(value ?? '')
+	  return {
+		name,
+		valueFrom: parsed.valueFrom
+	  }
+	})
 
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
@@ -751,7 +745,7 @@ spec:
               readOnly: true
           env:
 			${predefinedSecrets}
-			${secretEnvs}
+			${secretEnvsYaml}
             - name: GRAVITY_WEBSOCKET_URL
               value: "${process.env.GRAVITY_WEBSOCKET_URL}"
             - name: GRAVITY_API_URL
