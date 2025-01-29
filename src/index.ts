@@ -640,44 +640,6 @@ const sendDetailsToAgentJob = async (details: any) => {
 	const NAMESPACE = process.env.NAMESPACE || "gravity-cloud"
 	const random4Char = Math.random().toString(36).substring(2, 6)
 
-	const predefinedSecrets = [
-		"          - name: POSTGRES_PASSWORD",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: postgres-secrets",
-		"                key: postgres-password",
-		"          - name: REDIS_PASSWORD",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: redis-secrets",
-		"                key: redis-password",
-		"          - name: GRAVITY_API_KEY",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: gravity-agent-secrets",
-		"                key: gravity-api-key",
-		"          - name: GITHUB_TOKEN",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: gravity-agent-secrets",
-		"                key: github-token",
-		"          - name: ARGOCD_TOKEN",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: gravity-agent-secrets",
-		"                key: argo-cd-token",
-		"          - name: AWS_ACCESS_KEY_ID",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: gravity-agent-secrets",
-		"                key: aws-access-key-id",
-		"          - name: AWS_SECRET_ACCESS_KEY",
-		"            valueFrom:",
-		"              secretKeyRef:",
-		"                name: gravity-agent-secrets",
-		"                key: aws-secret-access-key"
-	].join("\n");
-
 	let additionalEnvVarsFromString: { name: string, value: string }[] = []
 	if (process.env.ADDITIONAL_ENV) {
 		additionalEnvVarsFromString = process.env.ADDITIONAL_ENV.split(',')
@@ -726,7 +688,37 @@ spec:
             - name: cgroup
               mountPath: /sys/fs/cgroup
               readOnly: true
-          env:${predefinedSecrets}${secretEnvsYaml}
+          env:
+						- name: POSTGRES_PASSWORD
+							valueFrom:
+								secretKeyRef:
+									name: postgres-secrets
+									key: postgres-password
+						- name: REDIS_PASSWORD
+							valueFrom:
+								secretKeyRef:
+									name: redis-secrets
+									key: redis-password
+						- name: GRAVITY_API_KEY
+							valueFrom:
+								secretKeyRef:
+									name: gravity-agent-secrets
+									key: gravity-api-key
+						- name: GITHUB_TOKEN
+							valueFrom:
+								secretKeyRef:
+									name: gravity-agent-secrets
+									key: github-token
+						- name: ARGOCD_TOKEN
+							valueFrom:
+								secretKeyRef:
+									name: gravity-agent-secrets
+									key: argo-cd-token
+						- name: AWS_ACCESS_KEY_ID
+							valueFrom:
+									secretKeyRef:
+										name: gravity-agent-secrets
+										key: aws-access-key-id${secretEnvsYaml}
             - name: GRAVITY_WEBSOCKET_URL
               value: "${process.env.GRAVITY_WEBSOCKET_URL}"
             - name: GRAVITY_API_URL
