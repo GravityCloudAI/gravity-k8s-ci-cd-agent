@@ -700,22 +700,22 @@ const sendDetailsToAgentJob = async (details: any) => {
 
 	// Get all environment variables that use secretKeyRef, excluding known secrets
 	const secretEnvsYaml = Object.entries(process.env)
-	.filter(([key, value]) => {
-	  if (knownSecretEnvs.includes(key)) return false
-	  try {
-		const parsed = JSON.parse(value ?? '')
-		return parsed?.valueFrom?.secretKeyRef?.name && parsed?.valueFrom?.secretKeyRef?.key
-	  } catch {
-		return false
-	  }
-	})
-	.map(([name, value]) => {
-	  const parsed = JSON.parse(value ?? '')
-	  return {
-		name,
-		valueFrom: parsed.valueFrom
-	  }
-	})
+		.filter(([key, value]) => {
+			if (knownSecretEnvs.includes(key)) return false
+			try {
+				const parsed = JSON.parse(value ?? '')
+				return parsed?.valueFrom?.secretKeyRef?.name && parsed?.valueFrom?.secretKeyRef?.key
+			} catch {
+				return false
+			}
+		})
+		.map(([name, value]) => {
+			const parsed = JSON.parse(value ?? '')
+			return {
+				name,
+				valueFrom: parsed.valueFrom
+			}
+		})
 
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
@@ -799,6 +799,8 @@ spec:
           hostPath:
             path: /sys/fs/cgroup
             type: Directory`
+
+	console.log("Generated Template: ", jobTemplate)
 
 	const tempFile = path.join(os.tmpdir(), `job-${details.deploymentRunId}-${random4Char}.yaml`)
 	fs.writeFileSync(tempFile, jobTemplate)
