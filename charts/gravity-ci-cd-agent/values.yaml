@@ -71,6 +71,7 @@ components:
         ARGOCD_URL: ""
         DOCKER_REGISTRY_URL: ""
         DOCKER_REGISTRY_PORT: "5000"
+        CUSTOM_SECRETS: ""
     service:
       name: gravity-agent-service
       type: ClusterIP

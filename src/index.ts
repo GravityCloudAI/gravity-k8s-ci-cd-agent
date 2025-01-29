@@ -687,35 +687,11 @@ const sendDetailsToAgentJob = async (details: any) => {
 			.filter(env => env.name && env.value)
 	}
 
-
-	const knownSecretEnvs = [
-		'POSTGRES_PASSWORD',
-		'REDIS_PASSWORD',
-		'GRAVITY_API_KEY',
-		'GITHUB_TOKEN',
-		'AWS_ACCESS_KEY_ID',
-		'AWS_SECRET_ACCESS_KEY',
-		'ARGOCD_TOKEN'
-	]
-
-	// Get all environment variables that use secretKeyRef, excluding known secrets
-	const secretEnvsYaml = Object.entries(process.env)
-		.filter(([key, value]) => {
-			if (knownSecretEnvs.includes(key)) return false
-			try {
-				const parsed = JSON.parse(value ?? '')
-				return parsed?.valueFrom?.secretKeyRef?.name && parsed?.valueFrom?.secretKeyRef?.key
-			} catch {
-				return false
-			}
-		})
-		.map(([name, value]) => {
-			const parsed = JSON.parse(value ?? '')
-			return {
-				name,
-				valueFrom: parsed.valueFrom
-			}
-		})
+	const secretEnvsYaml = process.env.CUSTOM_SECRETS ? 
+    Object.entries(yaml.parse(process.env.CUSTOM_SECRETS)).map(([name, value]: [string, any]) => ({
+        name,
+        valueFrom: value.valueFrom
+    })) : [];
 
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
@@ -743,9 +719,7 @@ spec:
             - name: cgroup
               mountPath: /sys/fs/cgroup
               readOnly: true
-          env:
-			${predefinedSecrets}
-			${secretEnvsYaml}
+          env:${predefinedSecrets}${secretEnvsYaml}
             - name: GRAVITY_WEBSOCKET_URL
               value: "${process.env.GRAVITY_WEBSOCKET_URL}"
             - name: GRAVITY_API_URL
@@ -783,8 +757,7 @@ spec:
             - name: DOCKER_REGISTRY_PORT
               value: "${process.env.DOCKER_REGISTRY_PORT}"  			  		
             - name: DEPLOYMENT_RUN_ID
-              value: "${details.deploymentRunId}"
-            ${additionalEnvVarsFromString.map(env => `
+              value: "${details.deploymentRunId}"${additionalEnvVarsFromString.map(env => `
             - name: ${env.name}
               value: "${env.value}"`).join('')}
           resources:
