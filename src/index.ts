@@ -718,7 +718,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: gravity-agent-secrets
-                  key: aws-access-key-id${secretEnvsYaml}
+                  key: aws-access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gravity-agent-secrets
+                  key: aws-secret-access-key${secretEnvsYaml}
             - name: GRAVITY_WEBSOCKET_URL
               value: "${process.env.GRAVITY_WEBSOCKET_URL}"
             - name: GRAVITY_API_URL
