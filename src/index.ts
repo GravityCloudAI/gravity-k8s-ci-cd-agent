@@ -691,7 +691,13 @@ const sendDetailsToAgentJob = async (details: any) => {
     Object.entries(yaml.parse(process.env.CUSTOM_SECRETS)).map(([name, value]: [string, any]) => ({
         name,
         valueFrom: value.valueFrom
-    })) : [];
+    })).map(secret => 
+        `\n            - name: ${secret.name}
+              valueFrom:
+                secretKeyRef:
+                  name: ${secret.valueFrom.secretKeyRef.name}
+                  key: ${secret.valueFrom.secretKeyRef.key}`
+    ).join('') : '';
 
 	const jobTemplate = `apiVersion: batch/v1
 kind: Job
