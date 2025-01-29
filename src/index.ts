@@ -3,7 +3,8 @@ import { Octokit } from "@octokit/rest"
 import axios from "axios"
 import path from "path";
 import os from "os";
-import fs from "fs"; import pg from 'pg'
+import fs from "fs";
+import pg from 'pg'
 import { io, Socket } from 'socket.io-client'
 import { v4 } from 'uuid'
 import yaml from 'yaml'
@@ -1324,23 +1325,26 @@ const processJob = async () => {
 					if (service.gravityConfig?.spec?.actions) {
 						await Promise.all(service.gravityConfig?.spec?.actions?.map(async (action: Action) => {
 							try {
+
+								const arch = await customExec(deploymentRunId, "SETUP_ACTION", serviceName, "uname -m")
+								const installArch = arch.trim() === 'x86_64' ? 'amd64' :
+									arch.trim() === 'aarch64' ? 'arm64' :
+										arch.trim() === 'armv7l' ? 'armv6l' :
+											'amd64' // fallback to amd64 if unknown
+
 								switch (action.uses) {
 									case 'actions/setup-go@v1':
 										const goVersion = action.with.version
 										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Installing Go version ${goVersion}`)
 
-										const arch = await customExec(deploymentRunId, "SETUP_ACTION", serviceName, "uname -m")
-										const goArch = arch.trim() === 'x86_64' ? 'amd64' :
-											arch.trim() === 'aarch64' ? 'arm64' :
-												arch.trim() === 'armv7l' ? 'armv6l' :
-													'amd64' // fallback to amd64 if unknown
+
 
 										// Download and extract Go
 										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
-											curl -OL https://golang.org/dl/go${goVersion}.linux-${goArch}.tar.gz && \
+											curl -OL https://golang.org/dl/go${goVersion}.linux-${installArch}.tar.gz && \
 											rm -rf /usr/local/go && \
-											tar -C /usr/local -xzf go${goVersion}.linux-${goArch}.tar.gz && \
-											rm go${goVersion}.linux-${goArch}.tar.gz && \
+											tar -C /usr/local -xzf go${goVersion}.linux-${installArch}.tar.gz && \
+											rm go${goVersion}.linux-${installArch}.tar.gz && \
 											ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
 											ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 										`)
@@ -1362,12 +1366,21 @@ const processJob = async () => {
 									case 'cue-lang/setup-cue@v1':
 										const cueVersion = action.with.version
 										syncLogsToGravityViaWebsocket(deploymentRunId, "SETUP_ACTION", serviceName, `Installing Cue version ${cueVersion}`)
+
 										await customExec(deploymentRunId, "SETUP_ACTION", serviceName, `
-											curl -OL https://github.com/cue-lang/cue/releases/download/${cueVersion}/cue_${cueVersion}_linux_amd64.tar.gz && \
-											tar -xzf cue_${cueVersion}_linux_amd64.tar.gz && \
+											curl -OL https://github.com/cue-lang/cue/releases/download/${cueVersion}/cue_${cueVersion}_linux_${installArch}.tar.gz && \
+											tar -xzf cue_${cueVersion}_linux_${installArch}.tar.gz && \
+											chmod +x cue && \
 											mv cue /usr/local/bin/cue && \
-											rm cue_${cueVersion}_linux_amd64.tar.gz
+											rm cue_${cueVersion}_linux_${installArch}.tar.gz
 										`)
+
+										// Add Cue to global PATH
+										fs.writeFileSync('/etc/profile.d/cue.sh', 'export PATH=$PATH:/usr/local/bin\n')
+										fs.chmodSync('/etc/profile.d/cue.sh', '755')
+
+										// Set environment variables for current process
+										process.env.PATH = `${process.env.PATH}:/usr/local/bin`
 										break
 
 									case 'actions/encore@v1':
