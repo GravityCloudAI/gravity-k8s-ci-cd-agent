@@ -685,9 +685,10 @@ spec:
               add:
                 - SYS_ADMIN
           volumeMounts:
-            - name: cgroup
-              mountPath: /sys/fs/cgroup
-              readOnly: true
+            - name: buildkit
+              mountPath: /var/lib/buildkit
+			- name: cache
+              mountPath: /root/.cache
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:
@@ -772,10 +773,10 @@ spec:
               memory: "4096Mi"
               cpu: "4000m"
       volumes:
-        - name: cgroup
-          hostPath:
-            path: /sys/fs/cgroup
-            type: Directory`
+        - name: buildkit
+          emptyDir: {}
+		- name: cache
+          emptyDir: {}`
 
 	console.log("Generated Template: ", jobTemplate)
 
@@ -1444,12 +1445,12 @@ const processJob = async () => {
 					const localRegistryUrl = `${process.env?.DOCKER_REGISTRY_URL}:${process.env?.DOCKER_REGISTRY_PORT}`
 
 					// Build Docker image
-					let dockerBuildCli = process.env.ENV === "production" ? "buildah --storage-driver vfs" : "docker"
+					let dockerBuildCli = process.env.ENV === "production" ? "buildctl" : "docker"
 					const serviceContext = path.join(gitRepoPath, service.servicePath)
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
 					const dockerBuildCommand = process.env.ENV === "production"
-						? `${dockerBuildCli} bud --isolation chroot --platform=linux/amd64 --tls-verify=false --layers --jobs=20 --cache-from ${localRegistryUrl}/${owner}/${serviceName}/cache --cache-to ${localRegistryUrl}/${owner}/${serviceName}/cache -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`
+						? `${dockerBuildCli} build --frontend=dockerfile.v0 --local context=${serviceContext} --local dockerfile=${dockerfilePath} --output type=oci,dest=./${owner}-${serviceName}-${lastRunBranch}.tar --export-cache type=registry,ref=${localRegistryUrl}/${owner}/${serviceName}:cache,insecure=true --import-cache type=registry,ref=${localRegistryUrl}/${owner}/${serviceName}:cache,insecure=true --opt build-arg:BUILDKIT_MULTI_PLATFORM=1 --opt platform=linux/amd64`
 						: `${dockerBuildCli} build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
@@ -1500,14 +1501,9 @@ const processJob = async () => {
 
 										const imageTag = `${latestDeployRun.head_sha?.slice(0, 7)}-${lastRunBranch}`
 
-										// tag the docker image with the aws repository name and region
-										const dockerTagCommand = `${dockerBuildCli} tag ${owner}/${serviceName}:latest ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
-										await customExec(deploymentRunId, "DOCKER_IMAGE_TAG", serviceName, dockerTagCommand)
+										const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region us-east-1 | skopeo login --username AWS --password-stdin ${ecrBaseURL} && skopeo copy oci-archive:./${owner}-${serviceName}-${lastRunBranch}.tar docker://${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
 
-										const dockerPushCommand = `AWS_ACCESS_KEY_ID=${process.env.AWS_ACCESS_KEY_ID} AWS_SECRET_ACCESS_KEY=${process.env.AWS_SECRET_ACCESS_KEY} aws ecr get-login-password --region ${region} | ${dockerBuildCli} login --username AWS --password-stdin ${ecrBaseURL} && ${dockerBuildCli} push ${ecrBaseURL}/${awsRepositoryName}:${imageTag}`
 										await customExec(deploymentRunId, "DOCKER_IMAGE_PUSH", serviceName, dockerPushCommand)
-
-										// await customExec(deploymentRunId, "DOCKER_LOGOUT", serviceName, `${dockerBuildCli} logout ${ecrBaseURL}`)
 
 										sendSlackNotification("Docker Push Completed", `Docker push completed for ${serviceName} / ${lastRunBranch} in ${repository} at ${region}}`)
 

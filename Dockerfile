@@ -9,16 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     iptables \
     git \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN echo "deb http://deb.debian.org/debian sid main" | tee /etc/apt/sources.list.d/sid.list
-
-# Install Buildah
-RUN apt-get update \
-    && apt-get -t sid install -y buildah
-
-# Verify Buildah installation
-RUN echo "Buildah version: $(buildah --version)"
+    skopeo
 
 # Install AWS CLI v2
 RUN ARCH=$(uname -m) && \
@@ -57,6 +48,33 @@ RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/s
 
 RUN helm version --short
 
+RUN curl -LO "https://github.com/opencontainers/runc/releases/download/${RUNC_VERSION}/runc.${ARCH}" && \
+    install -m 755 runc.${ARCH} /usr/local/bin/runc && \
+    rm runc.${ARCH}
+
+RUN set -ex && \
+    BUILDKIT_VERSION=v0.19.0 && \
+    ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        ARCH="amd64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        ARCH="arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH"; exit 1; \
+    fi && \
+    curl -LO "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" && \
+    tar -xvzf buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz -C /usr && \
+    rm buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz && \
+    mkdir -p /etc/buildkit && \
+    echo '[worker.oci]' > /etc/buildkit/buildkitd.toml && \
+    echo '  max-parallelism = 50' >> /etc/buildkit/buildkitd.toml && \
+    echo '[registry."gravity-docker-registry:5000"]' >> /etc/buildkit/buildkitd.toml && \
+    echo '  http = true' >> /etc/buildkit/buildkitd.toml && \
+    echo '  insecure = true' >> /etc/buildkit/buildkitd.toml
+
+
+RUN echo "Buildkit version: $(buildctl --version)"
+
 # Create the working directory
 WORKDIR /usr/src/app
 
@@ -71,10 +89,11 @@ RUN mkdir /usr/src/app/image-cache
 # Build the Node.js application
 RUN npm run build
 
-# Set the user to root to run Buildah if needed
 USER root
 
 VOLUME /var/lib/containers
 
 # Start the application
-CMD [ "npm", "start" ]
+# CMD [ "npm", "start" ]
+
+CMD ["sh", "-c", "buildkitd --config /etc/buildkit/buildkitd.toml & npm start"]
