@@ -83,7 +83,7 @@ RUN BUILDKIT_VERSION=v0.19.0 && \
 RUN mkdir -p /etc/buildkit && \
     echo '[worker.oci]' > /etc/buildkit/buildkitd.toml && \
     echo '  max-parallelism = 50' >> /etc/buildkit/buildkitd.toml && \
-    echo '[registry."gravity-docker-registry:5000"]' > /etc/buildkit/buildkitd.toml && \
+    echo '[registry."gravity-docker-registry:5000"]' >> /etc/buildkit/buildkitd.toml && \
     echo '  http = true' >> /etc/buildkit/buildkitd.toml && \
     echo '  insecure = true' >> /etc/buildkit/buildkitd.toml
 

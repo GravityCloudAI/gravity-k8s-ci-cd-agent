@@ -685,9 +685,10 @@ spec:
               add:
                 - SYS_ADMIN
           volumeMounts:
-            - name: cgroup
-              mountPath: /sys/fs/cgroup
-              readOnly: true
+            - name: buildkit
+              mountPath: /var/lib/buildkit
+			- name: cache
+              mountPath: /root/.cache
           env:
             - name: POSTGRES_PASSWORD
               valueFrom:
@@ -772,10 +773,10 @@ spec:
               memory: "4096Mi"
               cpu: "4000m"
       volumes:
-        - name: cgroup
-          hostPath:
-            path: /sys/fs/cgroup
-            type: Directory`
+        - name: buildkit
+          emptyDir: {}
+		- name: cache
+          emptyDir: {}`
 
 	console.log("Generated Template: ", jobTemplate)
 
