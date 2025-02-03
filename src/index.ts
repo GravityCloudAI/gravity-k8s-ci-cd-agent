@@ -687,7 +687,7 @@ spec:
           volumeMounts:
             - name: buildkit
               mountPath: /var/lib/buildkit
-			- name: cache
+            - name: cache
               mountPath: /root/.cache
           env:
             - name: POSTGRES_PASSWORD
@@ -772,11 +772,11 @@ spec:
             limits:
               memory: "4096Mi"
               cpu: "4000m"
-      volumes:
-        - name: buildkit
-          emptyDir: {}
-		- name: cache
-          emptyDir: {}`
+          volumes:
+            - name: buildkit
+              emptyDir: {}
+            - name: cache
+              emptyDir: {}`
 
 	console.log("Generated Template: ", jobTemplate)
 
