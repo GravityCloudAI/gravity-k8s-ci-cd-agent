@@ -675,6 +675,11 @@ spec:
     spec:
       restartPolicy: OnFailure
       serviceAccountName: gravity-job-agent-sa
+      volumes:
+        - name: buildkit
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
       containers:
         - name: gravity-job-agent-${details.deploymentRunId}-${random4Char}
           image: gravitycloud/gravity-ci-cd-agent:${process.env.ENV === "production" ? "latest" : "dev"}
@@ -771,12 +776,7 @@ spec:
               cpu: "512m"
             limits:
               memory: "4096Mi"
-              cpu: "4000m"
-          volumes:
-            - name: buildkit
-              emptyDir: {}
-            - name: cache
-              emptyDir: {}`
+              cpu: "4000m"`
 
 	console.log("Generated Template: ", jobTemplate)
 
