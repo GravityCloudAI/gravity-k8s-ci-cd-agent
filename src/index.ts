@@ -1450,7 +1450,7 @@ const processJob = async () => {
 					const dockerfilePath = path.join(serviceContext, 'Dockerfile')
 
 					const dockerBuildCommand = process.env.ENV === "production"
-						? `${dockerBuildCli} build --frontend=dockerfile.v0 --local context=${serviceContext} --local dockerfile=${dockerfilePath} --output type=oci,dest=./${owner}-${serviceName}-${lastRunBranch}.tar --export-cache type=registry,ref=${localRegistryUrl}/${owner}/${serviceName}:cache,insecure=true --import-cache type=registry,ref=${localRegistryUrl}/${owner}/${serviceName}:cache,insecure=true --opt build-arg:BUILDKIT_MULTI_PLATFORM=1 --opt platform=linux/amd64`
+						? `${dockerBuildCli} build --frontend=dockerfile.v0 --local context=${serviceContext} --local dockerfile=${serviceContext} --output type=oci,dest=./${owner}-${serviceName}-${lastRunBranch}.tar --export-cache type=registry,ref=${localRegistryUrl}/${owner}/${serviceName}:cache,insecure=true --import-cache type=registry,ref=${localRegistryUrl}/${owner}/${serviceName}:cache,insecure=true --opt build-arg:BUILDKIT_MULTI_PLATFORM=1 --opt platform=linux/amd64`
 						: `${dockerBuildCli} build --platform=linux/amd64 -t ${owner}/${serviceName}:latest -f ${dockerfilePath} ${serviceContext}`;
 
 					await customExec(deploymentRunId, "DOCKER_IMAGE_BUILD", serviceName, dockerBuildCommand)
