@@ -3,8 +3,8 @@ name: gravity-ci-cd-agent
 description: Helm chart to deploy the Gravity Cloud CI/CD Agent for ArgoCD
 type: application
 icon: https://gravitycloud.ai/favicon.png
-appVersion: 1.0.18
-version: 1.0.23
+appVersion: 1.0.19
+version: 1.0.24
 maintainers:
   - name: Vatsal Bajpai
     email: vatsal@gravitycloud.ai
