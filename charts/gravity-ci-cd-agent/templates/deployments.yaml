@@ -20,6 +20,10 @@ spec:
       {{- if eq $componentName "gravityAgent" }}
       serviceAccountName: {{ $.Values.rbac.serviceAccount.name }}
       {{- end }}
+      {{- with $.Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ $component.deployment.name }}
           image: "{{ $component.deployment.image.repository }}:{{ $component.deployment.image.tag }}"
