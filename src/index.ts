@@ -1946,14 +1946,14 @@ const processJob = async () => {
 
 							//  need to add repository to via helm repo add
 							const helmRepoAddCommand = `helm repo add ${chart.repositoryName} ${chart.chartRepository} --force-update`
-							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmRepoAddCommand, false)
+							await customExec(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, helmRepoAddCommand, false)
 
-							await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, "helm repo update", false)
+							await customExec(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, "helm repo update", false)
 
 							// remove branch name from chart name
 							const helmChartInstallCommand = `helm upgrade --install ${cleanChartName} ${chart.chartName} --repo ${chart.chartRepository} --namespace ${lastRunBranch} --create-namespace --version ${chart.chartVersion} -f ${valuesFilePath}`
 							console.log(`Helm command: ${helmChartInstallCommand}`)
-							// await customExec(deploymentRunId, "CHART_DEPLOYMENT", lastRunBranch, helmChartInstallCommand, false)
+							await customExec(deploymentRunId, "CHART_DEPLOYMENT", `[pipeline] ${lastRunBranch}`, helmChartInstallCommand, false)
 							fs.unlinkSync(valuesFilePath)
 						} catch (error) {
 							console.error(`Error deploying chart ${chart.chartName}: ${error}`)
