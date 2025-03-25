@@ -88,6 +88,23 @@ interface Action {
 	}
 }
 
+interface PullRequest {
+	id: number;
+	number: number;
+	state: string; // 'open', 'closed'
+	title: string;
+	head: {
+		ref: string;  // branch name
+		sha: string;  // commit SHA
+	};
+	base: {
+		ref: string;  // target branch
+	};
+	merged: boolean;
+	updated_at: string;
+	user: any;
+}
+
 const pool = new Pool({
 	host: process.env.POSTGRES_HOST,
 	database: process.env.POSTGRES_DB,
@@ -740,8 +757,6 @@ spec:
               value: "${process.env.ENV}"
             - name: GITHUB_REPOSITORIES
               value: "${process.env.GITHUB_REPOSITORIES}"
-            - name: GIT_BRANCHES_ALLOWED
-              value: "${process.env.GIT_BRANCHES_ALLOWED}"
             - name: GITHUB_JOB_NAME
               value: "${process.env.GITHUB_JOB_NAME}"
             - name: AWS_ACCOUNT_ID
@@ -1040,6 +1055,26 @@ export const triggerDeployment = async (repository: string, branch: string) => {
 	}
 };
 
+const getPullRequests = async (octokit: Octokit, owner: string, repo: string, state: 'open' | 'closed' | 'all' = 'open'): Promise<PullRequest[]> => {
+	try {
+		const { data } = await octokit.rest.pulls.list({
+			owner,
+			repo,
+			state,
+			sort: 'updated',
+			direction: 'desc',
+			per_page: 100
+		});
+		return data.map((pr: any) => ({
+			...pr,
+			merged: false // Default value, you may need to adjust based on your PullRequest type requirements
+		}));
+	} catch (error) {
+		console.error(`Error getting pull requests for ${owner}/${repo}:`, error);
+		return [];
+	}
+}
+
 const getAllBranches = async (octokit: Octokit, owner: string, repo: string): Promise<any[]> => {
 	let allBranches: any[] = [];
 	let page = 1;
@@ -1061,6 +1096,78 @@ const getAllBranches = async (octokit: Octokit, owner: string, repo: string): Pr
 	return allBranches;
 }
 
+const syncPullRequests = async () => {
+	let client: pg.PoolClient | null = null
+	try {
+		client = await getDbConnection()
+		const repositories = await client?.query('SELECT * FROM repositories');
+		for (const repository of repositories?.rows) {
+			const [owner, repo] = repository.name.split('/');
+			const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN!! });
+
+			// Get open PRs
+			const openPRs = await getPullRequests(octokit, owner, repo, 'open');
+
+			// Get recently closed PRs (within last 24 hours)
+			const recentlyClosedPRs = await getPullRequests(octokit, owner, repo, 'closed');
+			const oneDayAgo = new Date();
+			oneDayAgo.setDate(oneDayAgo.getDate() - 1);
+			const filteredClosedPRs = recentlyClosedPRs.filter(pr =>
+				new Date(pr.updated_at) > oneDayAgo
+			);
+
+			// Process open PRs - trigger or update deployments
+			for (const pr of openPRs) {
+				const branchName = pr.head.ref;
+				const lastCommitSha = pr.head.sha;
+
+				// Check if we already have a deployment for this PR/branch
+				const existingDeployment = await client?.query(
+					'SELECT * FROM deployments WHERE repository = $1 AND branch = $2',
+					[repository.name, branchName]
+				);
+
+				if (existingDeployment) {
+					// Check if PR has new commits since last deployment
+					if (existingDeployment.rows[0].commit_sha !== lastCommitSha) {
+						console.log(`PR #${pr.number} (${branchName}) has new commits, triggering update`);
+						// Trigger redeployment with new commit
+						await triggerDeployment(repository.name, branchName);
+					}
+				} else {
+					// New PR, trigger initial deployment
+					console.log(`New PR #${pr.number} (${branchName}), triggering initial deployment`);
+					await triggerDeployment(repository.name, branchName);
+				}
+			}
+
+			// Process recently closed PRs - handle cleanup
+			for (const pr of filteredClosedPRs) {
+				const branchName = pr.head.ref;
+
+				// If PR was merged or closed, clean up deployment
+				console.log(`PR #${pr.number} (${branchName}) was ${pr.merged ? 'merged' : 'closed'}, initiating cleanup`);
+				await processBranchDeletions({
+					repository: repository.name,
+					branches: [branchName]
+				});
+			}
+
+			await syncMetaDataWithGravity(repository.name, {
+				pullRequests: openPRs.map(pr => ({
+					number: pr.number,
+					title: pr.title,
+					branch: pr.head.ref,
+					user: pr.user,
+					updated_at: pr.updated_at
+				}))
+			});
+		}
+	} catch (error) {
+		console.error('Error syncing pull requests:', error);
+	}
+}
+
 const syncGitRepo = async () => {
 	let client: pg.PoolClient | null = null
 	try {
@@ -1078,11 +1185,12 @@ const syncGitRepo = async () => {
 				const branches = await getAllBranches(octokit, owner, repo);
 
 				try {
-					processBranchDeletions(branches)
 					syncMetaDataWithGravity(repository, branches)
 				} catch (error) {
 					console.error(`Error syncing metadata with Gravity for ${repository}:`, error)
 				}
+
+				await syncPullRequests()
 
 				// Get latest deploy run
 				let allWorkflowRuns: any = []
@@ -1119,34 +1227,11 @@ const syncGitRepo = async () => {
 				for (const [branch, latestDeployRun] of Object.entries(completedRuns) as [string, DeployRun][]) {
 					console.log(`Processing latest deploy run for branch ${branch}: ${latestDeployRun.id}`);
 
-					const gitBranchesAllowed = process.env.GIT_BRANCHES_ALLOWED!!.split(",")
-					const branchMatches = gitBranchesAllowed.some(allowedBranch => {
-						if (allowedBranch.endsWith('.*')) {
-							const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-							const pattern = new RegExp(`^${prefix}.*$`)
-							return pattern.test(branch)
-						}
-						return allowedBranch === branch
-					})
-
-					if (!branchMatches) {
-						console.log(`Branch ${branch} not in allowed list, skipping`)
-						continue;
+					if (new Date(latestDeployRun.updated_at).getTime() > Date.now() - 30 * 60 * 1000) {
+						console.log(`Branch ${branch} matches, processing`)
 					} else {
-
-						// check if the branch even exists in the repo
-						if (!branches.find((b: any) => b.name === branch)) {
-							console.log(`Branch ${branch} does not exist in the repo, skipping`)
-							continue
-						}
-
-						// check if the latestDeployRun was within 30 minutes
-						if (new Date(latestDeployRun.updated_at).getTime() > Date.now() - 30 * 60 * 1000) {
-							console.log(`Branch ${branch} matches, processing`)
-						} else {
-							console.log(`Branch ${branch} matches, but not within 30 minutes, skipping`)
-							continue
-						}
+						console.log(`Branch ${branch} matches, but not within 30 minutes, skipping`)
+						continue
 					}
 
 					// Check if already processed. Any state is fine, COMPLETED, FAILED, IN_PROGRESS. We do not auto-run the failed runs.
@@ -1336,19 +1421,7 @@ const processJob = async () => {
 								}
 							}
 
-							// check if branches array is null, then always run the command
 							let runCommand = true
-							if (preDeployStep.branches && preDeployStep.branches.length > 0) {
-								runCommand = preDeployStep.branches.includes(lastRunBranch)
-
-								// also check if the branch is a wildcard pattern
-								if (preDeployStep.branches.some(branch => branch.includes('.*'))) {
-									const branch = preDeployStep.branches.find((branch: string) => branch.includes('.*'))
-									const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-									const pattern = new RegExp(`^${prefix}.*$`)
-									runCommand = pattern.test(lastRunBranch)
-								}
-							}
 
 							if (runCommand) {
 								await customExec(deploymentRunId, "PRE_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${preDeployStep?.command}`)
@@ -1471,19 +1544,8 @@ const processJob = async () => {
 
 								// check if the branch is the same as the last run branch
 								if (awsRepositoryBranch !== lastRunBranch) {
-									// check if the branch is a wildcard pattern
-									if (awsRepositoryBranch.endsWith('.*')) {
-										// convert wildcard pattern to regex
-										const prefix = awsRepositoryBranch.slice(0, -2)
-										const pattern = new RegExp(`^${prefix}.*$`)
-										if (!pattern.test(lastRunBranch)) {
-											console.log(`Branch ${lastRunBranch} does not match pattern ${awsRepositoryBranch}, skipping deployment`)
-											return
-										}
-									} else {
-										console.log(`Branch ${lastRunBranch} does not match ${awsRepositoryBranch}, skipping deployment`)
-										return
-									}
+									console.log(`Branch ${lastRunBranch} does not match ${awsRepositoryBranch}, skipping deployment`)
+									return
 								}
 
 								await Promise.all(awsRepositoryRegions.map(async (region) => {
@@ -1578,15 +1640,7 @@ const processJob = async () => {
 												if (valueFilesPath?.includes('/')) {
 													const parts = valueFilesPath.split('/')
 													s3BucketName = parts[0]
-
-													const processedParts = parts.slice(1).map(part => {
-														if (part.endsWith('.*')) {
-															return lastRunBranch
-														}
-														return part
-													})
-
-													s3Prefix = processedParts.join('/')
+													s3Prefix = parts.slice(1).join('/')
 												}
 
 												let latestValueFileFromS3Bucket = ""
@@ -1710,15 +1764,8 @@ const processJob = async () => {
 													const parts = argoApplicationFilePath.split('/')
 													s3BucketName = parts[0]
 
-													const processedParts = parts.slice(1).map((part: string) => {
-														if (part.endsWith('.*')) {
-															return lastRunBranch
-														}
-														return part
-													})
-													s3Prefix = processedParts.join('/')
+													s3Prefix = parts.slice(1).join('/')
 												}
-
 
 												let latestArgoApplicationFileFromS3Bucket = ""
 
@@ -1824,19 +1871,6 @@ const processJob = async () => {
 
 							// check if branches array is null, then always run the command
 							let runCommand = true
-							if (postDeployStep.branches && postDeployStep.branches.length > 0) {
-								runCommand = postDeployStep.branches.includes(lastRunBranch)
-
-								// also check if the branch is a wildcard pattern
-								if (postDeployStep.branches.some(branch => branch.includes('.*'))) {
-									const branch = postDeployStep.branches.find((branch: string) => branch.includes('.*'))
-									const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-									const pattern = new RegExp(`^${prefix}.*$`)
-
-									runCommand = pattern.test(lastRunBranch)
-								}
-							}
-
 							if (runCommand) {
 								sendSlackNotification("Running Post Deploy Command", `${postDeployStep.command} for ${serviceName} / ${lastRunBranch} in ${repository}`)
 								const postDeployCommandResult = await customExec(deploymentRunId, "POST_DEPLOY_STEP", serviceName, `cd ${gitRepoPath} && ${postDeployStep.command}`, false, { BRANCH: lastRunBranch, ...(postDeployStep.env?.reduce((acc, env) => ({ ...acc, [env.name]: env.value }), {}) || {}) })
@@ -1847,14 +1881,6 @@ const processJob = async () => {
 
 										if (cleanupStep.branches && cleanupStep.branches.length > 0) {
 											saveInDatabase = cleanupStep.branches.includes(lastRunBranch);
-
-											// also check if the branch is a wildcard pattern
-											if (cleanupStep.branches.some(branch => branch.includes('.*'))) {
-												const branch = cleanupStep.branches.find((branch: string) => branch.includes('.*'))
-												const prefix = branch?.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-												const pattern = new RegExp(`^${prefix}.*$`)
-												saveInDatabase = pattern.test(lastRunBranch)
-											}
 										}
 
 										if (saveInDatabase) {
@@ -1899,29 +1925,13 @@ const processJob = async () => {
 				}
 			}))
 
-			const matchedAllowedRegex = process.env.GIT_BRANCHES_ALLOWED?.split(',').find(allowedBranch => {
-				// Check for exact match first
-				if (allowedBranch === lastRunBranch) {
-					return allowedBranch;
-				}
-				// Check for wildcard pattern match
-				if (allowedBranch.endsWith('.*')) {
-					const prefix = allowedBranch.slice(0, -2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-					const pattern = new RegExp(`^${prefix}.*$`);
-					if (pattern.test(lastRunBranch)) {
-						return allowedBranch;
-					}
-				}
 
-				return false
-			});
-
-			if (matchedAllowedRegex && process.env.GRAVITY_API_URL) {
+			if (lastRunBranch && process.env.GRAVITY_API_URL) {
 				syncLogsToGravityViaWebsocket(deploymentRunId, "CHART_DEPENDENCIES", `[pipeline] ${lastRunBranch}`, `Fetching chart dependecies for branch: ${lastRunBranch}`, false)
 				const pipelineChartsRez = await axios.post<PipelineCharts>(`${process.env.GRAVITY_API_URL}/api/v1/graviton/kube/pipeline-charts`, {
 					awsAccountId: process.env.AWS_ACCOUNT_ID,
 					gravityApiKey: process.env.GRAVITY_API_KEY,
-					branch: matchedAllowedRegex
+					branch: lastRunBranch
 				})
 
 				const pipelineCharts = pipelineChartsRez?.data
