@@ -100,7 +100,6 @@ interface PullRequest {
 	base: {
 		ref: string;  // target branch
 	};
-	merged: boolean;
 	updated_at: string;
 	user: any;
 }
@@ -1065,9 +1064,20 @@ const getPullRequests = async (octokit: Octokit, owner: string, repo: string, st
 			direction: 'desc',
 			per_page: 100
 		});
-		return data.map((pr: any) => ({
-			...pr,
-			merged: false // Default value, you may need to adjust based on your PullRequest type requirements
+		return data.map(pr => ({
+			id: pr.id,
+			number: pr.number,
+			state: pr.state,
+			title: pr.title,
+			head: {
+				ref: pr.head.ref,
+				sha: pr.head.sha
+			},
+			base: {
+				ref: pr.base.ref
+			},
+			updated_at: pr.updated_at,
+			user: pr.user
 		}));
 	} catch (error) {
 		console.error(`Error getting pull requests for ${owner}/${repo}:`, error);
@@ -1145,8 +1155,6 @@ const syncPullRequests = async () => {
 			for (const pr of filteredClosedPRs) {
 				const branchName = pr.head.ref;
 
-				// If PR was merged or closed, clean up deployment
-				console.log(`PR #${pr.number} (${branchName}) was ${pr.merged ? 'merged' : 'closed'}, initiating cleanup`);
 				await processBranchDeletions({
 					repository: repository.name,
 					branches: [branchName]
